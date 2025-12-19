@@ -1,0 +1,7 @@
+__pycache__/
+*.py[cod]
+.env
+memorialis/
+*.log
+.DS_Store
+venv/
