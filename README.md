@@ -1,5 +1,7 @@
 # sentarion-mcp (v0.1.0)
 
+<!-- mcp-name: io.github.sammyboi81/sentarion -->
+
 Composite MCP server wrapping [Algernon](https://pypi.org/project/algernon-mcp/)
 (fan-out orchestration) and [ArkHive](https://github.com/sammyboi81/arkhive)
 (governed audit/memory). Connects to both as an MCP client — does not

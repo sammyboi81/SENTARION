@@ -1,0 +1,16 @@
+{
+  "$schema": "https://static.modelcontextprotocol.io/schemas/2025-07-09/server.schema.json",
+  "name": "io.github.sammyboi81/sentarion",
+  "description": "Composite MCP server: Algernon fan-out orchestration + ArkHive governed memory - cost prediction, dependency waves, fail-closed governance gates.",
+  "repository": { "url": "https://github.com/sammyboi81/sentarion", "source": "github" },
+  "version": "0.1.0",
+  "packages": [
+    {
+      "registryType": "pypi",
+      "identifier": "sentarion-mcp",
+      "version": "0.1.0",
+      "transport": { "type": "stdio" },
+      "runtimeHint": "python"
+    }
+  ]
+}
