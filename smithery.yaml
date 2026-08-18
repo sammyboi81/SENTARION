@@ -1,0 +1,16 @@
+# Smithery registry config — https://smithery.ai
+startCommand:
+  type: stdio
+  configSchema:
+    type: object
+    properties:
+      arkhiveMcpUrl:
+        type: string
+        description: ArkHive MCP endpoint (default https://arkhive.dondatabrain.com/mcp)
+    required: []
+  commandFunction: |-
+    (config) => ({
+      command: "sentarion",
+      args: [],
+      env: config.arkhiveMcpUrl ? { ARKHIVE_MCP_URL: config.arkhiveMcpUrl } : {}
+    })
