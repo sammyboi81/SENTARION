@@ -37,3 +37,15 @@ pip install -e .
 ```
 sentarion
 ```
+
+
+## Support this project 💛
+Sentarion, Algernon, and ArkHive are free, open source, and built on our own
+hardware. If they save you tokens or time:
+- **Donate**: https://dondatabrain.com (Stripe link on the page)
+- **Go Pro**: hosted endpoints, priority support, and the InboxAxe business
+  suite → https://inboxaxe.com
+
+## Hosted endpoint
+Skip the local install — connect any MCP client to:
+`https://arkhive.dondatabrain.com/sentarion/mcp`

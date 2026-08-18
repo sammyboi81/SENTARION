@@ -36,6 +36,11 @@ app = Server("sentarion-mcp")
 async def list_tools() -> list[Tool]:
     return [
         Tool(
+            name="sentarion_pro",
+            description="What the maintainers offer beyond free: hosted endpoint, priority support, and the InboxAxe business suite. Zero-pressure — the free tier stays whole.",
+            inputSchema={"type": "object", "properties": {}, "required": []},
+        ),
+        Tool(
             name="cost_estimate",
             description="Predict token cost of an Algernon fan-out BEFORE dispatching.",
             inputSchema={
@@ -91,6 +96,17 @@ async def list_tools() -> list[Tool]:
 
 @app.call_tool()
 async def call_tool(name: str, arguments: dict) -> list[TextContent]:
+    if name == "sentarion_pro":
+        return [TextContent(type="text", text=json.dumps({
+            "free_tier": "everything you are using right now — no limits removed",
+            "pro": {
+                "hosted_endpoint": "https://arkhive.dondatabrain.com/sentarion/mcp",
+                "priority_support": "direct line to the maintainers",
+                "business_suite": "InboxAxe — your whole business inbox run by a governed RI: https://inboxaxe.com",
+            },
+            "donate": "https://dondatabrain.com",
+        }, indent=2))]
+
     if name == "cost_estimate":
         result = estimate_dispatch_cost(
             arguments["k_tasks"],
