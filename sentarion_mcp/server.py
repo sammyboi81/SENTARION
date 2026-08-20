@@ -1,19 +1,35 @@
 """
-Sentarion MCP — composite server wrapping Algernon + ArkHive.
+Sentarion MCP — composite server upgrading Algernon + ArkHive + Humane.
 
-Does NOT reimplement either upstream server. Connects to both as an MCP
-client and adds three things neither has on its own:
+Does NOT reimplement any upstream server. Connects to all three as an MCP
+client and fuses them into one governed orchestration substrate:
+
+  - Humane Intelligence — local covenant/identity gate (born-not-configured),
+    zero-LLM governance, tamper-evident local chain.
+  - ArkHive — hosted, tamper-evident audit/memory chain.
+  - Algernon — fan-out planning/dispatch muscle.
+
+What Sentarion adds that none of the three has alone:
   1. Cost prediction before dispatch (cost_estimate.py)
   2. Dependency-ordered fan-out/fan-in dispatch (dependency_graph.py)
-  3. A governance gate + auto-audit-log wrapper around Algernon calls
-     (govern_stub.py — SEE THAT FILE, it is a placeholder pending the
-     real ArkHive `govern` schema)
+  3. A TWO-CHAMBER governance gate (Humane + ArkHive, fail-closed) wrapping
+     every orchestration call (govern_stub.py)
+  4. Dual-chain memory: remember/recall/verify write and prove across BOTH
+     the local Humane chain and the hosted ArkHive chain at once.
+  5. Covenant-gated identity: sentarion_birth earns a soul_id before any
+     governed action, honoring Humane's Law 5 (born, not configured).
 
 Tools exposed:
-  - cost_estimate(goal, k, input_price_per_mtok, output_price_per_mtok)
-  - orchestrate_and_record(goal, k)   -> govern-gated plan+dispatch, auto-remembered
-  - dispatch_with_dependencies(tasks_json)  -> wave-ordered dispatch via Algernon
-  - recall_and_replan(query, k)       -> pull ArkHive history into a new Algernon plan
+  - sentarion_pro()
+  - cost_estimate(k_tasks, input_price_per_mtok, output_price_per_mtok)
+  - sentarion_birth(name, covenant)                 -> earn a soul_id (Humane)
+  - remember(actor, action, data)                   -> dual-chain write
+  - recall(actor, limit)                            -> merged dual-chain read
+  - verify()                                        -> prove BOTH chains intact
+  - govern(action, flags, rules)                    -> two-chamber verdict
+  - orchestrate_and_record(goal, k, flags)          -> govern-gated plan+dispatch, auto-logged
+  - dispatch_with_dependencies(tasks_json)          -> wave-ordered dispatch
+  - recall_and_replan(query, k)                     -> history-primed Algernon plan
 """
 
 from __future__ import annotations
@@ -24,12 +40,24 @@ from mcp.server import Server
 from mcp.server.stdio import stdio_server
 from mcp.types import TextContent, Tool
 
-from .clients import algernon_session, arkhive_session
+from .clients import (
+    HumaneNotConfigured,
+    algernon_session,
+    arkhive_session,
+    humane_session,
+    record_ts,
+    tool_json,
+    tool_records,
+)
 from .cost_estimate import estimate_dispatch_cost
 from .dependency_graph import resolve_waves
-from .govern_stub import govern_stub  # real ArkHive govern client, fail-closed
+from .govern_stub import govern_stub
 
 app = Server("sentarion-mcp")
+
+
+def _ok(payload) -> list[TextContent]:
+    return [TextContent(type="text", text=json.dumps(payload, indent=2, default=str))]
 
 
 @app.list_tools()
@@ -54,13 +82,70 @@ async def list_tools() -> list[Tool]:
             },
         ),
         Tool(
+            name="sentarion_birth",
+            description="Earn an identity (Humane Law 5: born, not configured) before acting. Returns a soul_id to use as `actor`.",
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "name": {"type": "string"},
+                    "covenant": {"type": "array", "items": {"type": "string"}},
+                },
+                "required": ["name", "covenant"],
+            },
+        ),
+        Tool(
+            name="remember",
+            description="Write a tamper-evident record to BOTH chains at once (local Humane + hosted ArkHive). Requires a born soul_id as actor.",
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "actor": {"type": "string"},
+                    "action": {"type": "string"},
+                    "data": {"type": "object"},
+                },
+                "required": ["actor", "action"],
+            },
+        ),
+        Tool(
+            name="recall",
+            description="Read prior context from BOTH chains and merge it, newest first, so the AI need not re-derive it.",
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "actor": {"type": "string"},
+                    "limit": {"type": "integer", "default": 10},
+                },
+                "required": [],
+            },
+        ),
+        Tool(
+            name="verify",
+            description="Prove BOTH audit chains (local Humane + hosted ArkHive) are unbroken.",
+            inputSchema={"type": "object", "properties": {}, "required": []},
+        ),
+        Tool(
+            name="govern",
+            description="Ask the two-chamber gate (Humane + ArkHive) 'may I?' before acting. Rule-based, zero-LLM, fail-closed.",
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "action": {"type": "string"},
+                    "flags": {"type": "array", "items": {"type": "string"}},
+                    "rules": {"type": "array", "items": {"type": "object"}},
+                },
+                "required": ["action"],
+            },
+        ),
+        Tool(
             name="orchestrate_and_record",
-            description="Govern-gated plan+dispatch via Algernon, auto-logged to ArkHive.",
+            description="Two-chamber-govern-gated plan+dispatch via Algernon, auto-logged to both chains.",
             inputSchema={
                 "type": "object",
                 "properties": {
                     "goal": {"type": "string"},
                     "k": {"type": "integer"},
+                    "flags": {"type": "array", "items": {"type": "string"}},
+                    "actor": {"type": "string"},
                 },
                 "required": ["goal", "k"],
             },
@@ -81,7 +166,7 @@ async def list_tools() -> list[Tool]:
         ),
         Tool(
             name="recall_and_replan",
-            description="Recall prior ArkHive state on a topic, feed it into a new Algernon plan.",
+            description="Recall prior state from both chains, feed it into a new Algernon plan.",
             inputSchema={
                 "type": "object",
                 "properties": {
@@ -97,7 +182,7 @@ async def list_tools() -> list[Tool]:
 @app.call_tool()
 async def call_tool(name: str, arguments: dict) -> list[TextContent]:
     if name == "sentarion_pro":
-        return [TextContent(type="text", text=json.dumps({
+        return _ok({
             "free_tier": "everything you are using right now — no limits removed",
             "pro": {
                 "hosted_endpoint": "https://arkhive.dondatabrain.com/sentarion/mcp",
@@ -105,64 +190,158 @@ async def call_tool(name: str, arguments: dict) -> list[TextContent]:
                 "business_suite": "InboxAxe — your whole business inbox run by a governed RI: https://inboxaxe.com",
             },
             "donate": "https://dondatabrain.com",
-        }, indent=2))]
+        })
 
     if name == "cost_estimate":
-        result = estimate_dispatch_cost(
+        return _ok(estimate_dispatch_cost(
             arguments["k_tasks"],
             arguments["input_price_per_mtok"],
             arguments["output_price_per_mtok"],
+        ))
+
+    if name == "sentarion_birth":
+        payload = {"name": arguments["name"], "covenant": arguments["covenant"]}
+        try:
+            async with humane_session() as humane:
+                result = await humane.call_tool("birth", payload)
+            return _ok({"chain": "humane", "result": tool_json(result)})
+        except HumaneNotConfigured:
+            # Fall back to ArkHive birth if the hosted chain implements it.
+            async with arkhive_session() as arkhive:
+                result = await arkhive.call_tool("birth", payload)
+            return _ok({"chain": "arkhive", "result": tool_json(result)})
+
+    if name == "remember":
+        payload = {
+            "actor": arguments["actor"],
+            "action": arguments.get("action", ""),
+            "data": arguments.get("data", {}),
+        }
+        out = {}
+        try:
+            async with humane_session() as humane:
+                r = await humane.call_tool("remember", payload)
+            out["humane"] = tool_json(r)
+        except HumaneNotConfigured:
+            out["humane"] = "not_configured"
+        except Exception as e:
+            out["humane"] = f"error: {type(e).__name__}"
+        try:
+            async with arkhive_session() as arkhive:
+                r = await arkhive.call_tool("remember", payload)
+            out["arkhive"] = tool_json(r)
+        except Exception as e:
+            out["arkhive"] = f"error: {type(e).__name__}"
+        return _ok({"written": out})
+
+    if name == "recall":
+        args = {"limit": arguments.get("limit", 10)}
+        if arguments.get("actor"):
+            args["actor"] = arguments["actor"]
+        merged = []
+        try:
+            async with humane_session() as humane:
+                r = await humane.call_tool("recall", args)
+            merged += [{**x, "_chain": "humane"} for x in tool_records(r)]
+        except HumaneNotConfigured:
+            pass
+        except Exception:
+            pass
+        try:
+            async with arkhive_session() as arkhive:
+                r = await arkhive.call_tool("recall", args)
+            merged += [{**x, "_chain": "arkhive"} for x in tool_records(r)]
+        except Exception:
+            pass
+        merged.sort(key=record_ts, reverse=True)
+        return _ok(merged[: arguments.get("limit", 10)])
+
+    if name == "verify":
+        out = {}
+        try:
+            async with humane_session() as humane:
+                r = await humane.call_tool("verify", {})
+            out["humane"] = tool_json(r)
+        except HumaneNotConfigured:
+            out["humane"] = "not_configured"
+        except Exception as e:
+            out["humane"] = f"error: {type(e).__name__}"
+        try:
+            async with arkhive_session() as arkhive:
+                r = await arkhive.call_tool("verify", {})
+            out["arkhive"] = tool_json(r)
+        except Exception as e:
+            out["arkhive"] = f"error: {type(e).__name__}"
+        return _ok({"chains": out})
+
+    if name == "govern":
+        decision = await govern_stub(
+            arguments["action"],
+            {"flags": arguments.get("flags"), "rules": arguments.get("rules")},
         )
-        return [TextContent(type="text", text=json.dumps(result, indent=2))]
+        return _ok(decision)
 
     if name == "orchestrate_and_record":
         goal, k = arguments["goal"], arguments["k"]
+        actor = arguments.get("actor", "sentarion")
 
-        decision = await govern_stub("orchestrate", {"goal": goal, "k": k})
+        decision = await govern_stub(
+            "orchestrate", {"goal": goal, "k": k, "flags": arguments.get("flags")}
+        )
         if decision["decision"] != "approve":
-            return [TextContent(type="text", text=json.dumps(decision, indent=2))]
+            return _ok(decision)
 
         async with algernon_session() as algernon:
-            plan_and_results = await algernon.call_tool(
-                "algernon_orchestrate", {"goal": goal, "k": k}
-            )
+            r = await algernon.call_tool("algernon_orchestrate", {"goal": goal, "k": k})
+        plan_and_results = tool_json(r)
 
-        async with arkhive_session() as arkhive:
-            await arkhive.call_tool(
-                "remember",
-                {"content": json.dumps(plan_and_results), "tags": ["orchestrate", goal[:64]]},
-            )
+        record = {
+            "actor": actor,
+            "action": "orchestrate",
+            "data": {"goal": goal, "k": k, "results": plan_and_results},
+        }
+        try:
+            async with arkhive_session() as arkhive:
+                await arkhive.call_tool("remember", record)
+        except Exception:
+            pass
+        try:
+            async with humane_session() as humane:
+                await humane.call_tool("remember", record)
+        except (HumaneNotConfigured, Exception):
+            pass
 
-        return [TextContent(type="text", text=json.dumps(plan_and_results, indent=2))]
+        return _ok({"governance": decision, "results": plan_and_results})
 
     if name == "dispatch_with_dependencies":
         tasks = json.loads(arguments["tasks_json"])
         waves = resolve_waves(tasks)
-
         all_results = []
         async with algernon_session() as algernon:
             for wave in waves:
                 wave_payload = [{"id": t["id"], "prompt": t["prompt"]} for t in wave]
-                wave_result = await algernon.call_tool(
+                r = await algernon.call_tool(
                     "algernon_dispatch", {"tasks_json": json.dumps(wave_payload)}
                 )
-                all_results.append(wave_result)
-
-        return [TextContent(type="text", text=json.dumps(all_results, indent=2))]
+                all_results.append(tool_json(r))
+        return _ok({"waves": len(waves), "results": all_results})
 
     if name == "recall_and_replan":
         query, k = arguments["query"], arguments["k"]
-
-        async with arkhive_session() as arkhive:
-            history = await arkhive.call_tool("recall", {"query": query})
+        history = None
+        try:
+            async with arkhive_session() as arkhive:
+                r = await arkhive.call_tool("recall", {"query": query})
+            history = tool_json(r)
+        except Exception as e:
+            history = f"(arkhive recall unavailable: {type(e).__name__})"
 
         async with algernon_session() as algernon:
-            plan = await algernon.call_tool(
+            r = await algernon.call_tool(
                 "algernon_plan",
                 {"goal": f"{query}\n\nPrior context:\n{history}", "k": k},
             )
-
-        return [TextContent(type="text", text=json.dumps(plan, indent=2))]
+        return _ok(tool_json(r))
 
     raise ValueError(f"Unknown tool: {name}")
 

@@ -1,7 +1,7 @@
 [project]
 name = "sentarion-mcp"
-version = "0.1.1"
-description = "Composite MCP server wrapping Algernon (fan-out orchestration) and ArkHive (governed audit/memory) with cost prediction, dependency-aware dispatch, and phase-gated approval."
+version = "0.2.0"
+description = "Composite MCP server upgrading Algernon (fan-out orchestration), ArkHive (hosted governed audit/memory), and Humane Intelligence (local covenant/identity gate) into one substrate: two-chamber fail-closed governance, dual-chain tamper-evident memory, covenant-gated identity, cost prediction, and dependency-aware dispatch."
 requires-python = ">=3.10"
 license = { text = "Apache-2.0" }
 dependencies = [
