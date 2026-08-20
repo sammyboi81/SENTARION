@@ -28,8 +28,15 @@ Tools exposed:
   - verify()                                        -> prove BOTH chains intact
   - govern(action, flags, rules)                    -> two-chamber verdict
   - orchestrate_and_record(goal, k, flags)          -> govern-gated plan+dispatch, auto-logged
-  - dispatch_with_dependencies(tasks_json)          -> wave-ordered dispatch
+  - dispatch_with_dependencies(tasks_json)          -> GOVERNED wave-ordered dispatch
   - recall_and_replan(query, k)                     -> history-primed Algernon plan
+  - worktree(action, repo_path, ...)                -> governed git-worktree sandbox
+
+Safety note (rogue-incident, 2026-08-19): every tool that EXECUTES work or
+MUTATES state — orchestrate_and_record, dispatch_with_dependencies, and
+worktree create/remove — passes the two-chamber fail-closed gate BEFORE any
+effect. recall_and_replan is plan-only (no dispatch). The `worktree` skill
+exists so orchestrated work runs in an isolated checkout, never live files.
 """
 
 from __future__ import annotations
@@ -52,6 +59,7 @@ from .clients import (
 from .cost_estimate import estimate_dispatch_cost
 from .dependency_graph import resolve_waves
 from .govern_stub import govern_stub
+from . import worktree as wt
 
 app = Server("sentarion-mcp")
 
@@ -174,6 +182,24 @@ async def list_tools() -> list[Tool]:
                     "k": {"type": "integer"},
                 },
                 "required": ["query", "k"],
+            },
+        ),
+        Tool(
+            name="worktree",
+            description="Git-worktree sandbox skill: run dispatched work in an isolated worktree so it never touches the live checkout. action=create|list|remove. create/remove are two-chamber-governed; list is read-only.",
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "action": {"type": "string", "enum": ["create", "list", "remove"]},
+                    "repo_path": {"type": "string", "description": "path to the git repo"},
+                    "branch": {"type": "string", "description": "create: new branch name"},
+                    "base": {"type": "string", "description": "create: base ref (default HEAD)"},
+                    "path": {"type": "string", "description": "create: explicit worktree dir (optional)"},
+                    "worktree_path": {"type": "string", "description": "remove: worktree dir to remove"},
+                    "force": {"type": "boolean", "description": "remove: allow uncommitted changes"},
+                    "delete_branch": {"type": "string", "description": "remove: also delete this branch"},
+                },
+                "required": ["action", "repo_path"],
             },
         ),
     ]
@@ -316,6 +342,22 @@ async def call_tool(name: str, arguments: dict) -> list[TextContent]:
     if name == "dispatch_with_dependencies":
         tasks = json.loads(arguments["tasks_json"])
         waves = resolve_waves(tasks)
+
+        # SAFETY GATE (rogue-incident root cause, 2026-08-19): dispatch runs
+        # Algernon worker waves that can edit files. It MUST pass the
+        # two-chamber gate before any wave executes. Flags mark it as an
+        # effecting, file-touching action so covenant rules can veto it.
+        decision = await govern_stub(
+            "dispatch_with_dependencies",
+            {
+                "flags": ["executes_tasks", "may_edit_files"]
+                + list(arguments.get("flags") or []),
+                "rules": arguments.get("rules"),
+            },
+        )
+        if decision["decision"] != "approve":
+            return _ok({"governance": decision, "dispatched": False})
+
         all_results = []
         async with algernon_session() as algernon:
             for wave in waves:
@@ -324,7 +366,7 @@ async def call_tool(name: str, arguments: dict) -> list[TextContent]:
                     "algernon_dispatch", {"tasks_json": json.dumps(wave_payload)}
                 )
                 all_results.append(tool_json(r))
-        return _ok({"waves": len(waves), "results": all_results})
+        return _ok({"governance": decision, "waves": len(waves), "results": all_results})
 
     if name == "recall_and_replan":
         query, k = arguments["query"], arguments["k"]
@@ -342,6 +384,53 @@ async def call_tool(name: str, arguments: dict) -> list[TextContent]:
                 {"goal": f"{query}\n\nPrior context:\n{history}", "k": k},
             )
         return _ok(tool_json(r))
+
+    if name == "worktree":
+        action = arguments["action"]
+        repo_path = arguments["repo_path"]
+        try:
+            if action == "list":
+                return _ok({"worktrees": wt.list_worktrees(repo_path)})
+
+            if action == "create":
+                if not arguments.get("branch"):
+                    return _ok({"error": "create requires `branch`"})
+                decision = await govern_stub(
+                    "worktree_create",
+                    {"flags": ["mutates_repo", "creates_branch"],
+                     "rules": arguments.get("rules")},
+                )
+                if decision["decision"] != "approve":
+                    return _ok({"governance": decision, "created": False})
+                result = wt.create(
+                    repo_path,
+                    arguments["branch"],
+                    base=arguments.get("base"),
+                    path=arguments.get("path"),
+                )
+                return _ok({"governance": decision, **result})
+
+            if action == "remove":
+                if not arguments.get("worktree_path"):
+                    return _ok({"error": "remove requires `worktree_path`"})
+                decision = await govern_stub(
+                    "worktree_remove",
+                    {"flags": ["mutates_repo", "deletes_files"],
+                     "rules": arguments.get("rules")},
+                )
+                if decision["decision"] != "approve":
+                    return _ok({"governance": decision, "removed": False})
+                result = wt.remove(
+                    repo_path,
+                    arguments["worktree_path"],
+                    force=bool(arguments.get("force")),
+                    delete_branch=arguments.get("delete_branch"),
+                )
+                return _ok({"governance": decision, **result})
+
+            return _ok({"error": f"unknown worktree action: {action}"})
+        except wt.GitError as e:
+            return _ok({"error": f"git_error: {e}"})
 
     raise ValueError(f"Unknown tool: {name}")
 
