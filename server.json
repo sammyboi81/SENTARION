@@ -3,12 +3,12 @@
   "name": "io.github.sammyboi81/sentarion",
   "description": "Composite MCP server: Algernon fan-out orchestration + ArkHive governed memory - cost prediction, dependency waves, fail-closed governance gates.",
   "repository": { "url": "https://github.com/sammyboi81/sentarion", "source": "github" },
-  "version": "0.1.0",
+  "version": "0.2.0",
   "packages": [
     {
       "registryType": "pypi",
       "identifier": "sentarion-mcp",
-      "version": "0.1.0",
+      "version": "0.2.0",
       "transport": { "type": "stdio" },
       "runtimeHint": "python"
     }
