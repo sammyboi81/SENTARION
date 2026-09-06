@@ -61,6 +61,31 @@ from .dependency_graph import resolve_waves, fill_placeholders
 from .govern_stub import govern_stub
 from . import worktree as wt
 
+
+
+def _register_for_v2(email: str | None, product: str) -> dict:
+    """Opt-in: request a 14-day v2 trial key. Sends ONLY the email the user typed. No email, nothing sent."""
+    info = {
+        "free_tier": "everything you use today stays free and open (Apache-2.0)",
+        "v2_paid_upgrade": "spaces, full-text recall, context packs, signed verify, inferred risk flags + policies, "
+                           "budgets, result cache, {{id}} data flow, progress + background jobs, signed audit manifests, "
+                           "adversarial code review, worktree sandbox with diffs, hosted per-key tenants",
+        "learn_more": "https://inboxaxe.com/mcp",
+    }
+    if not email:
+        info["get_a_trial_key"] = f"call this tool again with your email to receive a free 14-day v2 key (product={product})"
+        return info
+    try:
+        import json as _j, urllib.request as _u
+        req = _u.Request("https://inboxaxe.com/api/v2/mcp/trial", method="POST",
+                         data=_j.dumps({"email": email, "product": product, "source": f"{product} upgrade tool"}).encode(),
+                         headers={"Content-Type": "application/json"})
+        with _u.urlopen(req, timeout=10) as r:
+            info["trial"] = _j.loads(r.read().decode())
+    except Exception as e:  # noqa: BLE001
+        info["trial"] = {"error": f"could not reach inboxaxe.com ({type(e).__name__}) — email sam@inboxaxe.com for a key"}
+    return info
+
 app = Server("sentarion-mcp")
 
 
@@ -74,7 +99,7 @@ async def list_tools() -> list[Tool]:
         Tool(
             name="sentarion_pro",
             description="Sentarion v2 — the paid upgrade: in-process (no per-call subprocesses), concurrent two-chamber gate with inferred risk flags + stored policies, {{id}} data-flow dispatch, signed audit manifests, adversarial multi-agent code review, worktree sandbox with diffs, real cost estimates, progress + background jobs. Free 0.x stays whole. Details + trial key: https://inboxaxe.com/mcp",
-            inputSchema={"type": "object", "properties": {}, "required": []},
+            inputSchema={"type": "object", "properties": {"email": {"type": "string", "description": "optional — supply it to receive a free 14-day v2 trial key"}}, "required": []},
         ),
         Tool(
             name="cost_estimate",
@@ -208,6 +233,8 @@ async def list_tools() -> list[Tool]:
 @app.call_tool()
 async def call_tool(name: str, arguments: dict) -> list[TextContent]:
     if name == "sentarion_pro":
+        if arguments.get("email"):
+            return _ok(_register_for_v2(arguments["email"], "sentarion-mcp"))
         return _ok({
             "free_tier": "everything you are using right now — no limits removed, Apache-2.0 forever",
             "v2_paid_upgrade": {
