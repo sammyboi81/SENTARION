@@ -83,12 +83,20 @@ def _resolve_algernon() -> list[str]:
 
 
 def _resolve_humane() -> list[str] | None:
-    """Build the Humane server command from env config. None = not configured."""
+    """Build the local-chamber command. Order: SENTARION_HUMANE_CMD, a humane binary on PATH, then the
+    bundled `arkhive-mcp` package (a dependency since 0.2.2) run as `python -m arkhive_mcp.server` with
+    its own chain file — so the local chamber always exists. None only if even that is missing."""
     cmd = os.getenv("SENTARION_HUMANE_CMD")
     raw_args = os.getenv("SENTARION_HUMANE_ARGS", "")
     if not cmd:
         found = shutil.which("humane-intelligence") or shutil.which("humane-mcp")
-        return [found] if found else None
+        if found:
+            return [found]
+        try:
+            import arkhive_mcp  # noqa: F401
+            return [sys.executable, "-m", "arkhive_mcp.server"]
+        except ImportError:
+            return None
     if raw_args.strip().startswith("["):
         args = json.loads(raw_args)
     else:
@@ -96,12 +104,43 @@ def _resolve_humane() -> list[str] | None:
     return [cmd, *args]
 
 
+def _ollama_up(base: str) -> bool:
+    try:
+        import httpx
+        return httpx.get(f"{base.rstrip('/')}/api/tags", timeout=1.5).status_code == 200
+    except Exception:  # noqa: BLE001
+        return False
+
+
+def fleet_env() -> dict:
+    """The environment the Algernon fleet runs with.
+
+    0.2.1 passed the whole ambient environment through, so a stale OPENAI_API_KEY left in a shell
+    silently beat the Ollama config the user had written for Algernon (observed: 401 invalid_api_key).
+    Now: SENTARION_FLEET_PROVIDER=anthropic|openai|ollama wins; else a key that is set is used; else a
+    local Ollama (OLLAMA_BASE_URL, default http://127.0.0.1:11434) is used for free.
+    """
+    env = dict(os.environ)
+    forced = (env.get("SENTARION_FLEET_PROVIDER") or env.get("ALGERNON_PROVIDER") or "").lower()
+    ollama = env.get("OLLAMA_BASE_URL", "http://127.0.0.1:11434")
+    if forced == "anthropic":
+        env.pop("OPENAI_API_KEY", None)
+    elif forced == "openai":
+        env.pop("ANTHROPIC_API_KEY", None)
+    elif forced == "ollama" or (not env.get("ANTHROPIC_API_KEY") and not env.get("OPENAI_API_KEY") and _ollama_up(ollama)):
+        env.pop("ANTHROPIC_API_KEY", None)
+        env["OPENAI_API_KEY"] = "ollama"
+        env["OPENAI_BASE_URL"] = f"{ollama.rstrip('/')}/v1"
+        env.setdefault("OPENAI_MODEL", env.get("OLLAMA_MODEL", "llama3.2:3b"))
+    return env
+
+
 @asynccontextmanager
 async def algernon_session():
     """Launches the local Algernon MCP process (installed via `pip install algernon-mcp`)."""
     argv = _resolve_algernon()
     params = StdioServerParameters(
-        command=argv[0], args=argv[1:], env=dict(os.environ)
+        command=argv[0], args=argv[1:], env=fleet_env()
     )
     async with stdio_client(params) as (read, write):
         async with ClientSession(read, write) as session:
@@ -131,8 +170,10 @@ async def humane_session():
             "Humane server not configured: set SENTARION_HUMANE_CMD "
             "(and SENTARION_HUMANE_ARGS) or put `humane-intelligence` on PATH."
         )
+    env = dict(os.environ)
+    env.setdefault("ARKHIVE_DB", os.path.join(os.path.expanduser("~"), ".sentarion", "local_chamber.db"))
     params = StdioServerParameters(
-        command=argv[0], args=argv[1:], env=dict(os.environ)
+        command=argv[0], args=argv[1:], env=env
     )
     async with stdio_client(params) as (read, write):
         async with ClientSession(read, write) as session:

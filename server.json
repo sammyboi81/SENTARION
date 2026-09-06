@@ -3,12 +3,12 @@
   "name": "io.github.sammyboi81/sentarion",
   "description": "Governed multi-agent orchestration: fan-out dispatch, safety gates, tamper-evident memory.",
   "repository": { "url": "https://github.com/sammyboi81/sentarion", "source": "github" },
-  "version": "0.2.1",
+  "version": "0.2.2",
   "packages": [
     {
       "registryType": "pypi",
       "identifier": "sentarion-mcp",
-      "version": "0.2.1",
+      "version": "0.2.2",
       "transport": { "type": "stdio" },
       "runtimeHint": "python"
     }

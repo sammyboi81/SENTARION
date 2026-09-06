@@ -12,7 +12,10 @@ Circular dependencies raise before anything dispatches.
 
 from __future__ import annotations
 
+import re
 from typing import TypedDict
+
+_PLACEHOLDER = re.compile(r"\{\{\s*([A-Za-z0-9_\-]+)\s*\}\}")
 
 
 class Task(TypedDict):
@@ -41,3 +44,9 @@ def resolve_waves(tasks: list[Task]) -> list[list[Task]]:
             del remaining[t["id"]]
 
     return waves
+
+
+def fill_placeholders(prompt: str, completed: dict[str, str]) -> str:
+    """Replace {{task_id}} in a dependent prompt with that task's completed result (data flow).
+    Unknown ids are left untouched so the worker can see what was missing."""
+    return _PLACEHOLDER.sub(lambda m: completed.get(m.group(1), m.group(0)), prompt)

@@ -57,7 +57,7 @@ from .clients import (
     tool_records,
 )
 from .cost_estimate import estimate_dispatch_cost
-from .dependency_graph import resolve_waves
+from .dependency_graph import resolve_waves, fill_placeholders
 from .govern_stub import govern_stub
 from . import worktree as wt
 
@@ -73,7 +73,7 @@ async def list_tools() -> list[Tool]:
     return [
         Tool(
             name="sentarion_pro",
-            description="What the maintainers offer beyond free: hosted endpoint, priority support, and the InboxAxe business suite. Zero-pressure — the free tier stays whole.",
+            description="Sentarion v2 — the paid upgrade: in-process (no per-call subprocesses), concurrent two-chamber gate with inferred risk flags + stored policies, {{id}} data-flow dispatch, signed audit manifests, adversarial multi-agent code review, worktree sandbox with diffs, real cost estimates, progress + background jobs. Free 0.x stays whole. Details + trial key: https://inboxaxe.com/mcp",
             inputSchema={"type": "object", "properties": {}, "required": []},
         ),
         Tool(
@@ -209,12 +209,21 @@ async def list_tools() -> list[Tool]:
 async def call_tool(name: str, arguments: dict) -> list[TextContent]:
     if name == "sentarion_pro":
         return _ok({
-            "free_tier": "everything you are using right now — no limits removed",
-            "pro": {
-                "hosted_endpoint": "https://arkhive.dondatabrain.com/sentarion/mcp",
-                "priority_support": "direct line to the maintainers",
-                "business_suite": "InboxAxe — your whole business inbox run by a governed RI: https://inboxaxe.com",
+            "free_tier": "everything you are using right now — no limits removed, Apache-2.0 forever",
+            "v2_paid_upgrade": {
+                "what": [
+                    "in-process ArkHive + Algernon (no subprocess + handshake per call)",
+                    "concurrent two-chamber gate; inferred risk flags (PII, credentials, money, irreversible, outbound, bulk); stored, versioned policies; REVIEW verdict with a single human yes",
+                    "dispatch with {{id}} data flow between tasks, budgets, result cache, retries",
+                    "every run recorded as a signed manifest (prompt/result hashes, usage, cost)",
+                    "adversarial multi-agent code review (finders per dimension, skeptics refute)",
+                    "git-worktree sandbox: create / diff / apply_patch / commit — fleet edits never touch your checkout",
+                    "MCP progress + background jobs — no more 120 s tool-call deaths",
+                    "hosted endpoint with per-key tenant spaces",
+                ],
+                "get_a_trial_key": "https://inboxaxe.com/mcp",
             },
+            "business_suite": "InboxAxe — your whole business inbox run by a governed RI: https://inboxaxe.com",
             "donate": "https://dondatabrain.com",
         })
 
@@ -232,9 +241,14 @@ async def call_tool(name: str, arguments: dict) -> list[TextContent]:
                 result = await humane.call_tool("birth", payload)
             return _ok({"chain": "humane", "result": tool_json(result)})
         except HumaneNotConfigured:
-            # Fall back to ArkHive birth if the hosted chain implements it.
+            # Fall back to ArkHive birth if the hosted chain implements it. The hosted 0.x server
+            # types `covenant` as a string; retry with a joined string if the list is rejected.
             async with arkhive_session() as arkhive:
                 result = await arkhive.call_tool("birth", payload)
+                if tool_text(result).startswith("Error executing tool"):
+                    result = await arkhive.call_tool(
+                        "birth", {"name": payload["name"], "covenant": "; ".join(payload["covenant"])}
+                    )
             return _ok({"chain": "arkhive", "result": tool_json(result)})
 
     if name == "remember":
@@ -359,21 +373,27 @@ async def call_tool(name: str, arguments: dict) -> list[TextContent]:
             return _ok({"governance": decision, "dispatched": False})
 
         all_results = []
+        completed: dict[str, str] = {}
         async with algernon_session() as algernon:
             for wave in waves:
-                wave_payload = [{"id": t["id"], "prompt": t["prompt"]} for t in wave]
+                wave_payload = [{"id": t["id"], "prompt": fill_placeholders(t["prompt"], completed)} for t in wave]
                 r = await algernon.call_tool(
                     "algernon_dispatch", {"tasks_json": json.dumps(wave_payload)}
                 )
-                all_results.append(tool_json(r))
-        return _ok({"governance": decision, "waves": len(waves), "results": all_results})
+                parsed = tool_json(r)
+                all_results.append(parsed)
+                for item in (parsed.get("results") if isinstance(parsed, dict) else []) or []:
+                    if isinstance(item, dict) and item.get("result") is not None:
+                        completed[str(item.get("id"))] = str(item["result"])
+        return _ok({"governance": decision, "waves": len(waves), "results": all_results,
+                    "data_flow": "dependents received {{id}} substitutions from completed tasks"})
 
     if name == "recall_and_replan":
         query, k = arguments["query"], arguments["k"]
         history = None
         try:
             async with arkhive_session() as arkhive:
-                r = await arkhive.call_tool("recall", {"query": query})
+                r = await arkhive.call_tool("recall", {"limit": 10})
             history = tool_json(r)
         except Exception as e:
             history = f"(arkhive recall unavailable: {type(e).__name__})"
