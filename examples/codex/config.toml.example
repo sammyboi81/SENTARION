@@ -1,0 +1,9 @@
+# ~/.codex/config.toml
+#
+# Registers the Sentarion MCP server with the Codex CLI over stdio.
+# Provider keys (ANTHROPIC_API_KEY / OPENAI_API_KEY) come from your shell
+# environment; do not put them in this file.
+
+[mcp_servers.sentarion]
+command = "sentarion"
+args = []

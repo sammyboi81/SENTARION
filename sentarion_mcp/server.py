@@ -42,11 +42,14 @@ exists so orchestrated work runs in an isolated checkout, never live files.
 from __future__ import annotations
 
 import json
+import uuid
+from datetime import datetime, timezone
 
 from mcp.server import Server
 from mcp.server.stdio import stdio_server
 from mcp.types import TextContent, Tool
 
+from . import __version__
 from .clients import (
     HumaneNotConfigured,
     algernon_session,
@@ -55,11 +58,23 @@ from .clients import (
     record_ts,
     tool_json,
     tool_records,
+    tool_text,
 )
 from .cost_estimate import estimate_dispatch_cost
 from .dependency_graph import resolve_waves, fill_placeholders
+from .doctor import run_doctor
+from .quickstart import EXAMPLES as QUICKSTART_EXAMPLES, quickstart
 from .govern_stub import govern_stub
 from . import worktree as wt
+
+def _exc_name(e: BaseException) -> str:
+    """Return the underlying exception class name, unwrapping ExceptionGroup-like containers."""
+    try:
+        while getattr(e, "exceptions", None):
+            e = e.exceptions[0]
+    except Exception:
+        pass
+    return type(e).__name__
 
 
 
@@ -86,20 +101,127 @@ def _register_for_v2(email: str | None, product: str) -> dict:
         info["trial"] = {"error": f"could not reach inboxaxe.com ({type(e).__name__}) — email sam@inboxaxe.com for a key"}
     return info
 
-app = Server("sentarion-mcp")
+INSTRUCTIONS = (
+    "Sentarion gives your AI agents rules, memory, and receipts: a governed, fail-closed "
+    "orchestration layer over Algernon (dispatch), ArkHive (hosted tamper-evident memory) and a "
+    "local covenant chamber.\n\n"
+    "Start by calling sentarion_birth once to obtain a soul_id, and pass that soul_id as the "
+    "actor argument on every later call.\n\n"
+    "Call govern before any action that sends, deletes, spends, deploys or edits files. A block "
+    "verdict is final: do not retry it under another name and do not work around it.\n\n"
+    "Never invent tool results, chain records or capabilities. If a chain reports not_configured "
+    "or error, say so to the user instead of filling in what it might have said.\n\n"
+    "dispatch_with_dependencies takes tasks_json, a JSON array of objects with id, prompt and "
+    "depends_on (a list of ids). Tasks run in waves ordered by depends_on, and the text {{id}} "
+    "inside a prompt is replaced with the result of the task with that id.\n\n"
+    "Everything in this server is free and Apache-2.0; sentarion_pro describes the paid v2 "
+    "control plane and never changes free behavior."
+)
+
+app = Server("sentarion-mcp", version=__version__, instructions=INSTRUCTIONS)
 
 
 def _ok(payload) -> list[TextContent]:
     return [TextContent(type="text", text=json.dumps(payload, indent=2, default=str))]
 
 
+def _utcnow() -> str:
+    return datetime.now(timezone.utc).isoformat(timespec="seconds").replace("+00:00", "Z")
+
+
+def _summarize_results(plan_and_results) -> dict:
+    """tasks/succeeded/failed from an Algernon result when it carries a list of task dicts; else zeros."""
+    items = plan_and_results.get("results") if isinstance(plan_and_results, dict) else None
+    if not isinstance(items, list) or not all(isinstance(i, dict) for i in items):
+        return {"tasks": 0, "succeeded": 0, "failed": 0}
+    failed = sum(1 for i in items if i.get("error") or i.get("result") is None)
+    return {"tasks": len(items), "succeeded": len(items) - failed, "failed": failed}
+
+
+V2_WOULD_ADD = ["signed run manifest", "typed retries", "SHA-bound verification evidence", "adversarial review gate"]
+
+_PRO_TOPICS: dict[str, dict] = {
+    "worktree": {
+        "you_are_using": "The free worktree tool creates, lists and removes governed git worktrees so dispatched work never touches your live checkout.",
+        "v2_adds": [
+            "diff of a worktree against its base branch",
+            "apply_patch into a worktree from a reviewed patch",
+            "commit from a worktree with a signed manifest entry",
+            "cleanup policies for stale worktrees",
+        ],
+    },
+    "dispatch": {
+        "you_are_using": "dispatch_with_dependencies runs tasks in waves ordered by depends_on and substitutes {{id}} results into dependent prompts.",
+        "v2_adds": [
+            "per-run budgets that stop dispatch before overspend",
+            "a result cache so repeated prompts are not re-run",
+            "typed retries with backoff for failed tasks",
+            "MCP progress notifications and background jobs for long runs",
+        ],
+    },
+    "govern": {
+        "you_are_using": "govern asks two chambers (the local covenant chamber and hosted ArkHive) with zero LLM calls and fails closed.",
+        "v2_adds": [
+            "inferred risk flags (PII, credentials, money, irreversible, outbound, bulk) without hand-written flags",
+            "stored, versioned policies per team",
+            "a REVIEW verdict that waits for a single human yes",
+            "concurrent chamber calls instead of sequential ones",
+        ],
+    },
+    "memory": {
+        "you_are_using": "remember, recall and verify write to and prove both chains: the local chamber and hosted ArkHive.",
+        "v2_adds": [
+            "full-text recall across records",
+            "spaces that keep projects and tenants apart",
+            "context packs that bundle prior runs into a new plan",
+            "signed verify with a downloadable proof",
+        ],
+    },
+    "review": {
+        "you_are_using": "The free tier has no built-in code review; you can dispatch reviewers as ordinary tasks with dispatch_with_dependencies.",
+        "v2_adds": [
+            "adversarial multi-agent code review with finders per dimension",
+            "skeptic agents that try to refute each finding",
+            "a review gate that blocks a merge on unrefuted findings",
+            "review evidence bound to commit SHAs",
+        ],
+    },
+    "jobs": {
+        "you_are_using": "Every free tool call runs inside one MCP request and returns when the work is done.",
+        "v2_adds": [
+            "background jobs that outlive a single tool call",
+            "MCP progress notifications while a run executes",
+            "job status and cancel tools",
+            "no 120 second tool-call deaths on long runs",
+        ],
+    },
+}
+
+
 @app.list_tools()
 async def list_tools() -> list[Tool]:
     return [
         Tool(
+            name="sentarion_doctor",
+            description="Check that everything Sentarion needs is present and reachable (git, Algernon, local chamber, hosted ArkHive, fleet provider, Ollama, API key) and say exactly what to fix. Read-only; never prints secrets.",
+            inputSchema={"type": "object", "properties": {"timeout_s": {"type": "number", "default": 3}}, "required": []},
+        ),
+        Tool(
+            name="sentarion_quickstart",
+            description="Canonical, runnable examples for every Sentarion capability: plan a feature, fan out research, dispatch with dependencies, use a worktree, remember a result, replan from memory.",
+            inputSchema={"type": "object", "properties": {"topic": {"type": "string", "enum": list(QUICKSTART_EXAMPLES)}}, "required": []},
+        ),
+        Tool(
             name="sentarion_pro",
             description="Sentarion v2 — the paid upgrade: in-process (no per-call subprocesses), concurrent two-chamber gate with inferred risk flags + stored policies, {{id}} data-flow dispatch, signed audit manifests, adversarial multi-agent code review, worktree sandbox with diffs, real cost estimates, progress + background jobs. Free 0.x stays whole. Details + trial key: https://inboxaxe.com/mcp",
-            inputSchema={"type": "object", "properties": {"email": {"type": "string", "description": "optional — supply it to receive a free 14-day v2 trial key"}}, "required": []},
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "email": {"type": "string", "description": "optional — supply it to receive a free 14-day v2 trial key"},
+                    "topic": {"type": "string", "enum": list(_PRO_TOPICS), "description": "optional — what v2 adds to the capability you are using right now"},
+                },
+                "required": [],
+            },
         ),
         Tool(
             name="cost_estimate",
@@ -232,9 +354,26 @@ async def list_tools() -> list[Tool]:
 
 @app.call_tool()
 async def call_tool(name: str, arguments: dict) -> list[TextContent]:
+    if name == "sentarion_doctor":
+        return _ok(await run_doctor(float(arguments.get("timeout_s", 3.0))))
+
+    if name == "sentarion_quickstart":
+        return _ok(quickstart(arguments.get("topic")))
+
     if name == "sentarion_pro":
         if arguments.get("email"):
             return _ok(_register_for_v2(arguments["email"], "sentarion-mcp"))
+        topic = arguments.get("topic")
+        if topic:
+            info = _PRO_TOPICS.get(str(topic))
+            if info is None:
+                return _ok({"error": "unknown topic", "topics": list(_PRO_TOPICS)})
+            return _ok({
+                "you_are_using": info["you_are_using"],
+                "v2_adds": list(info["v2_adds"]),
+                "run": "sentarion_pro(email=...) for a trial key",
+                "free_stays_free": True,
+            })
         return _ok({
             "free_tier": "everything you are using right now — no limits removed, Apache-2.0 forever",
             "v2_paid_upgrade": {
@@ -292,13 +431,13 @@ async def call_tool(name: str, arguments: dict) -> list[TextContent]:
         except HumaneNotConfigured:
             out["humane"] = "not_configured"
         except Exception as e:
-            out["humane"] = f"error: {type(e).__name__}"
+            out["humane"] = f"error: {_exc_name(e)}"
         try:
             async with arkhive_session() as arkhive:
                 r = await arkhive.call_tool("remember", payload)
             out["arkhive"] = tool_json(r)
         except Exception as e:
-            out["arkhive"] = f"error: {type(e).__name__}"
+            out["arkhive"] = f"error: {_exc_name(e)}"
         return _ok({"written": out})
 
     if name == "recall":
@@ -332,13 +471,13 @@ async def call_tool(name: str, arguments: dict) -> list[TextContent]:
         except HumaneNotConfigured:
             out["humane"] = "not_configured"
         except Exception as e:
-            out["humane"] = f"error: {type(e).__name__}"
+            out["humane"] = f"error: {_exc_name(e)}"
         try:
             async with arkhive_session() as arkhive:
                 r = await arkhive.call_tool("verify", {})
             out["arkhive"] = tool_json(r)
         except Exception as e:
-            out["arkhive"] = f"error: {type(e).__name__}"
+            out["arkhive"] = f"error: {_exc_name(e)}"
         return _ok({"chains": out})
 
     if name == "govern":
@@ -351,38 +490,64 @@ async def call_tool(name: str, arguments: dict) -> list[TextContent]:
     if name == "orchestrate_and_record":
         goal, k = arguments["goal"], arguments["k"]
         actor = arguments.get("actor", "sentarion")
+        run = {
+            "run_id": uuid.uuid4().hex,
+            "goal": goal,
+            "k": k,
+            "actor": actor,
+            "started_at": _utcnow(),
+            "finished_at": None,
+        }
 
         decision = await govern_stub(
             "orchestrate", {"goal": goal, "k": k, "flags": arguments.get("flags")}
         )
         if decision["decision"] != "approve":
-            return _ok(decision)
+            run["finished_at"] = _utcnow()
+            return _ok({"run": run, "governance": decision, "dispatched": False})
 
         async with algernon_session() as algernon:
             r = await algernon.call_tool("algernon_orchestrate", {"goal": goal, "k": k})
         plan_and_results = tool_json(r)
+        summary = _summarize_results(plan_and_results)
 
         record = {
             "actor": actor,
             "action": "orchestrate",
-            "data": {"goal": goal, "k": k, "results": plan_and_results},
+            "data": {"run_id": run["run_id"], "goal": goal, "k": k, "summary": summary, "results": plan_and_results},
         }
+        memory: dict[str, str] = {}
         try:
             async with arkhive_session() as arkhive:
                 await arkhive.call_tool("remember", record)
-        except Exception:
-            pass
+            memory["arkhive"] = "recorded"
+        except Exception as e:  # noqa: BLE001
+            memory["arkhive"] = f"error: {_exc_name(e)}"
         try:
             async with humane_session() as humane:
                 await humane.call_tool("remember", record)
-        except (HumaneNotConfigured, Exception):
-            pass
+            memory["humane"] = "recorded"
+        except HumaneNotConfigured:
+            memory["humane"] = "not_configured"
+        except Exception as e:  # noqa: BLE001
+            memory["humane"] = f"error: {_exc_name(e)}"
 
-        return _ok({"governance": decision, "results": plan_and_results})
+        run["finished_at"] = _utcnow()
+        return _ok({
+            "run": run,
+            "governance": decision,
+            "results": plan_and_results,
+            "summary": summary,
+            "memory": memory,
+            "v2_would_add": list(V2_WOULD_ADD),
+        })
 
     if name == "dispatch_with_dependencies":
         tasks = json.loads(arguments["tasks_json"])
-        waves = resolve_waves(tasks)
+        try:
+            waves = resolve_waves(tasks)
+        except ValueError as e:
+            return _ok({"error": str(e), "dispatched": False})
 
         # SAFETY GATE (rogue-incident root cause, 2026-08-19): dispatch runs
         # Algernon worker waves that can edit files. It MUST pass the

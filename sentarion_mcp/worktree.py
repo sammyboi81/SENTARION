@@ -32,6 +32,7 @@ def _git(repo_path: str, *args: str, timeout: int = 60) -> str:
             ["git", "-C", repo_path, *args],
             capture_output=True,
             text=True,
+            stdin=subprocess.DEVNULL,
             timeout=timeout,
         )
     except FileNotFoundError as e:
