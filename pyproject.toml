@@ -1,6 +1,6 @@
 [project]
 name = "sentarion-mcp"
-version = "0.3.0"
+version = "0.3.1"
 readme = "README.md"
 description = "Composite MCP server upgrading Algernon (fan-out orchestration), ArkHive (hosted governed audit/memory), and Humane Intelligence (local covenant/identity gate) into one substrate: two-chamber fail-closed governance, dual-chain tamper-evident memory, covenant-gated identity, cost prediction, and dependency-aware dispatch."
 requires-python = ">=3.10"

@@ -105,7 +105,8 @@ INSTRUCTIONS = (
     "Sentarion gives your AI agents rules, memory, and receipts: a governed, fail-closed "
     "orchestration layer over Algernon (dispatch), ArkHive (hosted tamper-evident memory) and a "
     "local covenant chamber.\n\n"
-    "Start by calling sentarion_birth once to obtain a soul_id, and pass that soul_id as the "
+    "Start by calling sentarion_birth once: it bears your identity on BOTH chains and returns `actor` (your birth "
+    "name, which resolves to that identity on each chain); pass that actor as the "
     "actor argument on every later call.\n\n"
     "Call govern before any action that sends, deletes, spends, deploys or edits files. A block "
     "verdict is final: do not retry it under another name and do not work around it.\n\n"
@@ -238,7 +239,7 @@ async def list_tools() -> list[Tool]:
         ),
         Tool(
             name="sentarion_birth",
-            description="Earn an identity (Humane Law 5: born, not configured) before acting. Returns a soul_id to use as `actor`.",
+            description="Earn an identity (Humane Law 5: born, not configured) before acting - on BOTH chains, the local chamber and hosted ArkHive. Returns `actor` (your birth name; it resolves to this identity on each chain) plus each chain's soul_id. Never crashes: a chamber that cannot answer is reported with a fix.",
             inputSchema={
                 "type": "object",
                 "properties": {
@@ -250,7 +251,7 @@ async def list_tools() -> list[Tool]:
         ),
         Tool(
             name="remember",
-            description="Write a tamper-evident record to BOTH chains at once (local Humane + hosted ArkHive). Requires a born soul_id as actor.",
+            description="Write a tamper-evident record to BOTH chains at once (local Humane + hosted ArkHive). actor = the `actor` sentarion_birth returned (your birth name); each chain refuses an actor it has not born.",
             inputSchema={
                 "type": "object",
                 "properties": {
@@ -402,20 +403,52 @@ async def call_tool(name: str, arguments: dict) -> list[TextContent]:
 
     if name == "sentarion_birth":
         payload = {"name": arguments["name"], "covenant": arguments["covenant"]}
-        try:
-            async with humane_session() as humane:
-                result = await humane.call_tool("birth", payload)
-            return _ok({"chain": "humane", "result": tool_json(result)})
-        except HumaneNotConfigured:
-            # Fall back to ArkHive birth if the hosted chain implements it. The hosted 0.x server
-            # types `covenant` as a string; retry with a joined string if the list is rejected.
+
+        async def _arkhive_birth():
+            # The hosted 0.x server types `covenant` as a string; retry with a joined string if the list is rejected.
             async with arkhive_session() as arkhive:
                 result = await arkhive.call_tool("birth", payload)
                 if tool_text(result).startswith("Error executing tool"):
                     result = await arkhive.call_tool(
                         "birth", {"name": payload["name"], "covenant": "; ".join(payload["covenant"])}
                     )
-            return _ok({"chain": "arkhive", "result": tool_json(result)})
+            return tool_json(result)
+
+        # Born on BOTH chains. remember/recall/verify write to and prove both, and each chain refuses an
+        # actor it has not born (Law 5) - so a birth on the local chamber alone left every stranger's first
+        # hosted `remember` refused. The two chains mint their own soul_ids (the hosted chain is shared, so
+        # its sequence differs); the birth NAME resolves to your latest soul on either chain, so that is the
+        # `actor` to act as from now on.
+        out = {"actor": payload["name"], "name": payload["name"], "covenant": payload["covenant"]}
+        try:
+            async with humane_session() as humane:
+                result = await humane.call_tool("birth", payload)
+            out["humane"] = tool_json(result)
+        except HumaneNotConfigured:
+            out["humane"] = "not_configured"
+        except Exception as e:  # noqa: BLE001 - a chamber that cannot open its chain must not crash the tool
+            out["humane"] = {"error": _exc_name(e),
+                             "fix": "the local chamber could not answer. Its chain file is ARKHIVE_DB (default "
+                                    "~/.sentarion/local_chamber.db); if that file was written by ArkHive 2.x, move it "
+                                    "aside or point ARKHIVE_DB elsewhere. sentarion_doctor shows the chamber's state."}
+        try:
+            out["arkhive"] = await _arkhive_birth()
+        except Exception as e:  # noqa: BLE001
+            out["arkhive"] = {"error": _exc_name(e), "fix": "hosted ArkHive did not answer; check network access "
+                                                             "to ARKHIVE_MCP_URL or run sentarion_doctor"}
+        born_on = [k for k in ("humane", "arkhive") if isinstance(out[k], dict) and out[k].get("soul_id")]
+        # Backward-compatible fields: `chain` + `result` name the first chain that actually bore the identity.
+        first = born_on[0] if born_on else None
+        out["chain"] = first
+        out["result"] = out[first] if first else None
+        out["born_on"] = born_on
+        if not born_on:
+            out["error"] = "not_born"
+            out["reason"] = "neither chain bore the identity - see humane / arkhive above for the cause and the fix"
+        else:
+            out["next"] = (f"act as actor={payload['name']!r} (your birth name; it resolves to this identity on "
+                           f"{' and '.join(born_on)}). remember / recall / verify write to and prove both chains.")
+        return _ok(out)
 
     if name == "remember":
         payload = {

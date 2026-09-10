@@ -12,6 +12,33 @@ It composes three open-source MCP servers into one governed substrate — it con
 - [ArkHive](https://github.com/sammyboi81/arkhive) — hosted, tamper-evident audit/memory chain
 - a local covenant chamber (Humane Intelligence, or the bundled `arkhive-mcp` package when Humane is not installed)
 
+## The first minute
+
+Everything below was run, not written, against a clean `pip install sentarion-mcp` (2026-09-10).
+
+```
+you      > sentarion_birth(name="ember", covenant=["truth over comfort"])
+sentarion> born_on: ["humane", "arkhive"]        # your local chain AND the hosted one; act as actor="ember"
+you      > remember(actor="ember", action="decided: ship the 27-tool surface", data={"why": "87 was the tax"})
+sentarion> humane:  immutably recorded · arkhive: immutably recorded
+you      > verify()
+sentarion> humane:  INTACT — context provably unbroken
+           arkhive: INTACT — context provably unbroken
+```
+
+Now play the villain. Open `~/.sentarion/local_chamber.db` and change one word of that record by hand
+(`update blocks set action = replace(action, 'ship', 'cancel') where idx = 0`). Then:
+
+```
+you      > verify()
+sentarion> humane:  TAMPERED — 1 broken links
+```
+
+That is the whole idea. Your AI writes down what it did, reads it back next session, and a silent rewrite
+fails verification. Every record is hash-chained to the one before it; the hosted copy is a second witness.
+`govern` sits in front of anything that sends, spends, deletes or deploys and fails closed; `orchestrate_and_record`
+fans work out to cheap workers and puts the receipt on the same chain.
+
 ## Install
 
 ```bash
@@ -90,6 +117,14 @@ veto; if no chamber renders a verdict, the action is blocked. Every tool that ex
 Trial key + pricing: **https://inboxaxe.com/mcp** — or, from any client that has Sentarion loaded, call `sentarion_pro(email="you@company.com")` and a 14-day v2 key is requested for that address. Nothing is sent unless you supply an email.
 
 ## Changelog
+
+### 0.3.1
+- `sentarion_birth` bears the identity on **both** chains and returns `actor` (your birth name, which resolves on
+  each chain). Before, birth landed on the local chamber only, so a stranger's very first hosted `remember` was
+  refused as "not a born soul".
+- A chamber that cannot answer (for example a chain file written by ArkHive 2.x) is now a readable
+  `{error, fix}` in the birth reply instead of an "unhandled errors in a TaskGroup" crash.
+- README leads with the first minute, measured.
 
 ### 0.3.0
 - **Server instructions.** The MCP `initialize` response now carries usage guidance (birth first, govern before acting, never invent results, `{{id}}` data flow, free vs paid).
