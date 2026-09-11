@@ -34,10 +34,22 @@ you      > verify()
 sentarion> humane:  TAMPERED — 1 broken links
 ```
 
+And the gate, with nothing configured:
+
+```
+you      > govern(action="delete the production database")
+sentarion> block — Veto: irreversible -> refuse          (inferred_flags: ["irreversible"])
+you      > govern(action="email all 4,000 customers a discount code")
+sentarion> block — Veto: external_send -> refuse
+you      > govern(action="write a summary file")
+sentarion> approve
+```
+
 That is the whole idea. Your AI writes down what it did, reads it back next session, and a silent rewrite
 fails verification. Every record is hash-chained to the one before it; the hosted copy is a second witness.
-`govern` sits in front of anything that sends, spends, deletes or deploys and fails closed; `orchestrate_and_record`
-fans work out to cheap workers and puts the receipt on the same chain.
+`govern` reads the obvious risks off the action text (delete / drop / force-push, send to everyone, pay, deploy to
+production), blocks them by default and fails closed when no chamber answers; `orchestrate_and_record` asks it
+first, fans work out to cheap workers and puts the receipt on the same chain.
 
 ## Install
 
@@ -108,7 +120,7 @@ veto; if no chamber renders a verdict, the action is blocked. Every tool that ex
 | local MCP server, standard MCP client compatibility | durable jobs and background execution |
 | Algernon orchestration and dependency dispatch with `{{id}}` data flow | phase-gate workflow engine with role enforcement and structured task contracts |
 | ArkHive integration and the local chamber; remember / recall / verify | signed run manifests and SHA-bound verification evidence |
-| birth / identity; two-chamber fail-closed governance | inferred risk flags and a stored policy store |
+| birth / identity; two-chamber fail-closed governance; the obvious risk flags inferred from the action text | deeper inference (PII, credentials, money, bulk scope), a REVIEW verdict a human can turn into a yes, stored versioned policies, a remote chamber |
 | worktree create / list / remove | worktree diff / patch / commit, repository leases, repo truth snapshots |
 | local Ollama fleet; rough cost estimates | budgets and hard ceilings, retries, cache, advanced cost ledger |
 | single-user usage, basic audit events | adversarial code review, GitHub/CI workflow, team tenancy, hosted history, deployment gates |
@@ -124,6 +136,9 @@ Trial key + pricing: **https://inboxaxe.com/mcp** — or, from any client that h
   refused as "not a born soul".
 - A chamber that cannot answer (for example a chain file written by ArkHive 2.x) is now a readable
   `{error, fix}` in the birth reply instead of an "unhandled errors in a TaskGroup" crash.
+- `govern` infers the obvious risk flags from the action text (irreversible, external_send, spends_money, deploys)
+  and refuses them by default, on both chambers. Before, `govern("delete the production database")` was approved,
+  and so was the same call with `flags=["irreversible"]`, because no default rule named those triggers.
 - README leads with the first minute, measured.
 
 ### 0.3.0

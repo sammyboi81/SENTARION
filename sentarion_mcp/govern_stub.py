@@ -26,6 +26,7 @@ Decision rule:
 
 from __future__ import annotations
 
+import re
 from typing import Literal, TypedDict
 
 from .clients import (
@@ -41,6 +42,8 @@ class GovernDecision(TypedDict):
     decision: Literal["approve", "block"]
     reason: str
     chambers: dict
+    flags: list
+    inferred_flags: list
 
 
 # Default veto rules for orchestration dispatch. Callers may extend via the
@@ -49,7 +52,34 @@ _BASE_RULES = [
     {"trigger": "no_consent", "action": "refuse"},
     {"trigger": "raw_pii", "action": "refuse"},
     {"trigger": "spam_burst", "action": "throttle"},
+    # The obvious risk classes refuse by default. Measured 2026-09-10 from a clean install: without these,
+    # govern("delete the production database") - and even the same call with flags=["irreversible"] - was
+    # APPROVED, because no rule named those triggers. A gate that says yes to that is broken, not tiered.
+    {"trigger": "irreversible", "action": "refuse"},
+    {"trigger": "external_send", "action": "refuse"},
+    {"trigger": "spends_money", "action": "refuse"},
+    {"trigger": "deploys", "action": "refuse"},
 ]
+
+# What the free gate infers from the action text by itself: the verbs anyone would call dangerous. Deliberately
+# small and literal (v2 goes further: PII, credentials, bulk scope, stored policies, and a REVIEW verdict a human
+# can turn into a yes). Word-boundary matches, case-insensitive; ordinary planning text matches nothing.
+_INFER = {
+    "irreversible": re.compile(
+        r"\b(delete|drop|destroy|wipe|purge|truncate|erase|obliterate)\b|\brm\s+-[a-z]*r[a-z]*f|\bforce[- ]push|"
+        r"\breset\s+--hard|\bshred\b", re.I),
+    "external_send": re.compile(
+        r"\b(email|e-mail|send|post|publish|tweet|broadcast|dm|text|message|notify)\b[^.]{0,60}\b(all|every|everyone|"
+        r"customers?|subscribers?|users|list|contacts|followers|public|external)\b", re.I),
+    "spends_money": re.compile(r"\b(pay|charge|transfer|wire|refund|purchase|buy|bill)\b|\$\s?\d", re.I),
+    "deploys": re.compile(r"\b(deploy|release|ship|roll\s?out|push)\b[^.]{0,40}\b(prod|production|live|staging|main)\b", re.I),
+}
+
+
+def infer_flags(action: str) -> list[str]:
+    """Risk flags the free gate reads off the action text itself (see _INFER). Returns a sorted list."""
+    text = action or ""
+    return sorted(flag for flag, rx in _INFER.items() if rx.search(text))
 
 
 def _flags_dict(flags: list[str]) -> dict:
@@ -89,14 +119,16 @@ async def _ask_humane(action, flags, rules):
         return False, False, f"humane_transport_error: {type(e).__name__}"
 
 
-async def _ask_arkhive(action, flags):
-    # ArkHive's hosted govern cleanly supports the flags-dict allowed/echo path;
-    # rule enforcement is Humane's job, so we send an empty rules map here.
+async def _ask_arkhive(action, flags, rules):
+    # ArkHive's hosted govern takes flags as a {name: true} map and rules as a {trigger: action} map (its
+    # _as_rules accepts both forms). It gets the SAME rules as the local chamber, so when the local chamber is
+    # not configured the hosted one still vetoes the dangerous classes instead of echoing "allowed".
     try:
         async with arkhive_session() as arkhive:
             result = await arkhive.call_tool(
                 "govern",
-                {"action": action, "flags": _flags_dict(flags), "rules": {}},
+                {"action": action, "flags": _flags_dict(flags),
+                 "rules": {r["trigger"]: r.get("action", "refuse") for r in rules if r.get("trigger")}},
             )
         return _rendered_verdict(result)
     except Exception as e:
@@ -110,11 +142,13 @@ async def govern_stub(action: str, context: dict) -> GovernDecision:
       flags: list[str] — condition flags (e.g. "no_consent", "raw_pii")
       rules: list[dict] — extra {trigger, action} veto rules (Humane form)
     """
-    flags = list(context.get("flags") or [])
+    given = list(context.get("flags") or [])
+    inferred = infer_flags(action)
+    flags = sorted(set(given) | set(inferred))
     rules = _BASE_RULES + list(context.get("rules") or [])
 
     h_rendered, h_vetoed, h_reason = await _ask_humane(action, flags, rules)
-    a_rendered, a_vetoed, a_reason = await _ask_arkhive(action, flags)
+    a_rendered, a_vetoed, a_reason = await _ask_arkhive(action, flags, rules)
 
     chambers = {
         "humane": {"rendered": h_rendered, "vetoed": h_vetoed, "reason": h_reason},
@@ -125,7 +159,7 @@ async def govern_stub(action: str, context: dict) -> GovernDecision:
     if (h_rendered and h_vetoed) or (a_rendered and a_vetoed):
         who = "humane" if (h_rendered and h_vetoed) else "arkhive"
         return GovernDecision(
-            decision="block", reason=chambers[who]["reason"], chambers=chambers
+            decision="block", reason=chambers[who]["reason"], chambers=chambers, flags=flags, inferred_flags=inferred
         )
 
     # No veto rendered. Require at least one chamber to have actually decided.
@@ -133,7 +167,7 @@ async def govern_stub(action: str, context: dict) -> GovernDecision:
         return GovernDecision(
             decision="block",
             reason="no_governor_rendered_a_verdict_fail_closed",
-            chambers=chambers,
+            chambers=chambers, flags=flags, inferred_flags=inferred,
         )
 
-    return GovernDecision(decision="approve", reason="allowed", chambers=chambers)
+    return GovernDecision(decision="approve", reason="allowed", chambers=chambers, flags=flags, inferred_flags=inferred)
