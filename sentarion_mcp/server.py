@@ -42,6 +42,7 @@ exists so orchestrated work runs in an isolated checkout, never live files.
 from __future__ import annotations
 
 import json
+import sys
 import uuid
 from datetime import datetime, timezone
 
@@ -690,6 +691,11 @@ async def _run():
 def main():
     import asyncio
 
+    # `sentarion seatbelt ...` — the editor-hook CLI shares the console script so one install wires everything.
+    if len(sys.argv) > 1 and sys.argv[1] == "seatbelt":
+        from .seatbelt import main as seatbelt_main
+
+        sys.exit(seatbelt_main(sys.argv[2:]))
     asyncio.run(_run())
 
 

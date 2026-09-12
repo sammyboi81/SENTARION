@@ -37,3 +37,25 @@ What each one returns:
 - `recall`: records from both chains merged newest first.
 
 In Sentarion v2 the same run also produces a signed manifest and SHA-bound verification evidence; nothing above changes.
+
+## The seatbelt (hooks, not hope)
+
+An MCP tool only helps when the model decides to call it. `sentarion seatbelt` wires Claude Code **hooks** that run on
+every tool call whether the model remembers or not:
+
+```bash
+sentarion seatbelt install --client claude       # hooks + MCP server + baseline policy; add --kit DIR for a policy/skill pack
+sentarion seatbelt check --command "rm -rf build" # what would the gate say?
+sentarion seatbelt doctor                         # what is wired + a live self-test through the real hook command
+sentarion seatbelt recall                         # the brief the next session will see
+```
+
+- **PreToolUse** — the command or file path is matched against the policies in `~/.sentarion/seatbelt/policies/`
+  (baseline: the irreversible verbs ask; kit policies can refuse). A deny is enforced in every permission mode.
+- **PostToolUse** — every edit and command is recorded on the local ArkHive chain, so `recall` / `verify` see it.
+- **SessionStart** — the project brief: files edited, commands run, what failed, decisions recorded, how the last session ended.
+- **Stop** — with code edits and no test/build/run since the last edit, the agent is sent back once; the kit's wiring policy
+  also lists frontend routes with no backend.
+
+The packaged version with five policies, three skills and one-click installers is the
+[Claude Code Seatbelt Kit](https://inboxaxe.com/mcp#seatbelt).

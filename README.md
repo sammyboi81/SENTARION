@@ -59,6 +59,30 @@ pip install sentarion-mcp
 
 Then, from any MCP client, run `sentarion_doctor`. It checks git, Algernon, the local chamber, hosted ArkHive, the fleet provider, Ollama and your API key, reports `ready: true` when a run will work, and lists one fix per missing piece. It never prints a secret.
 
+## The seatbelt — hooks, not hope
+
+An MCP tool only helps when the model decides to call it. `sentarion seatbelt` wires Claude Code (and Cursor, beta)
+**hooks** that run on every tool call whether the model remembers or not, using the same gate vocabulary and the same
+local chain as the server:
+
+```bash
+sentarion seatbelt install --client claude        # hooks + the sentarion MCP server + baseline policy
+sentarion seatbelt check --command "rm -rf build"  # → ask (baseline) — what would the gate say?
+sentarion seatbelt doctor                          # what is wired, the policies, and a live self-test
+sentarion seatbelt recall                          # the project brief the next session will open with
+```
+
+| Hook | What the seatbelt does |
+|---|---|
+| PreToolUse | matches the command / file path / written content against `~/.sentarion/seatbelt/policies/*.json` → `deny` / `ask` / `allow`, with a reason. A deny is enforced in every permission mode and recorded on the chain. |
+| PostToolUse | records every edit and command on the local ArkHive chain (so `recall` and `verify` see it) and notes when a test/build/run command executes. |
+| SessionStart | the project brief: files edited, commands run, what failed, decisions recorded with `remember`, and how the last session ended. |
+| Stop | with code edits and no test/build/run since the last edit, sends the agent back once; a wiring policy can also list frontend routes with no backend. |
+
+Policies are plain JSON (`decision`, `tools`, `match`, `paths`, `content_match`, `reason`; see `seatbelt.POLICY_SCHEMA`).
+The baseline asks before the irreversible verbs. The packaged version with five policies, three skills and one-click
+installers is the [Claude Code Seatbelt Kit](https://inboxaxe.com/mcp#seatbelt).
+
 ## Quick start
 
 **Claude Code** ([examples/claude_code/](examples/claude_code/))
@@ -129,6 +153,9 @@ veto; if no chamber renders a verdict, the action is blocked. Every tool that ex
 Trial key + pricing: **https://inboxaxe.com/mcp** — or, from any client that has Sentarion loaded, call `sentarion_pro(email="you@company.com")` and a 14-day v2 key is requested for that address. Nothing is sent unless you supply an email.
 
 ## Changelog
+
+### 0.4.0
+- `sentarion seatbelt`: Claude Code / Cursor hooks (PreToolUse gate, PostToolUse memory, SessionStart brief, Stop gate), JSON policy files with a built-in baseline, install/uninstall/doctor/check/recall/policies CLI, 37 tests. Nothing in the MCP surface changed.
 
 ### 0.3.1
 - `sentarion_birth` bears the identity on **both** chains and returns `actor` (your birth name, which resolves on
