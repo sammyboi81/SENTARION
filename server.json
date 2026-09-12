@@ -3,12 +3,12 @@
   "name": "io.github.sammyboi81/sentarion",
   "description": "Give your AI agents rules, memory, and receipts. Governed multi-agent orchestration for MCP.",
   "repository": { "url": "https://github.com/sammyboi81/sentarion", "source": "github" },
-  "version": "0.4.0",
+  "version": "0.4.1",
   "packages": [
     {
       "registryType": "pypi",
       "identifier": "sentarion-mcp",
-      "version": "0.4.0",
+      "version": "0.4.1",
       "transport": { "type": "stdio" },
       "runtimeHint": "python"
     }

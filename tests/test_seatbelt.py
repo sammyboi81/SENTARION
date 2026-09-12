@@ -324,3 +324,70 @@ def test_edit_outside_the_project_never_triggers_the_stop_gate(sb, tmp_path):
     assert sb.hook_stop({"session_id": "s", "cwd": cwd}) is None
     blocks = sb.project_blocks(sb._project_of(cwd))
     assert any(b["action"] == "edit" and b["data"].get("outside") for b in blocks)   # still remembered
+
+
+# ------------------------------------------------------------------ 5. one chain with the v2 server
+
+def _core_is_v2() -> bool:
+    import arkhive_mcp.core as core
+    return hasattr(core, "Chain")
+
+
+def test_brief_tells_the_model_how_to_remember_for_the_installed_chain(sb, tmp_path):
+    text = sb.brief(str(_repo(tmp_path / "p")))
+    if _core_is_v2():
+        assert 'tags ["seatbelt"]' in text and "do not pass an actor" in text
+        assert 'with actor "seatbelt"' not in text
+    else:
+        assert 'with actor "seatbelt"' in text
+    assert sb.chain_mode() == ("v2" if _core_is_v2() else "legacy")
+
+
+@pytest.mark.skipif(not _core_is_v2(), reason="arkhive-mcp >= 2 not installed; the v2 chain path is not exercised")
+def test_v2_chain_is_shared_with_the_server_and_read_back_by_tag(sb, tmp_path):
+    """Measured 2026-09-12: the seatbelt wrote to the 0.x chamber while the v2 server wrote to
+    ~/.arkhive/v2/chain.db as actor `sentarion` and refused `remember(actor="seatbelt")`. Now: same file, same
+    space, the hooks' records are tagged, and a record the server's own seat writes with the tag is in the brief."""
+    from arkhive_mcp.core import Chain
+    proj = _repo(tmp_path / "p")
+    cwd = str(proj)
+    sb.hook_post({"session_id": "s", "cwd": cwd, "tool_name": "Bash", "tool_input": {"command": "pytest -q"},
+                  "tool_response": {"exit_code": 0}})
+    # what the model does after reading the brief: the server signs it as its runtime seat, no actor passed
+    server = Chain(db_path=str(sb.CHAIN_DB))
+    r = server.remember("sentarion", "decision: keep sqlite", {"project": cwd.replace("\\", "/")},
+                        tags=["seatbelt"], space=sb.SPACE, require_born=False)
+    assert r.get("hash") and r["space"] == sb.SPACE
+    text = sb.brief(cwd)
+    assert "pytest -q" in text and "keep sqlite" in text
+    v = sb._core().verify()
+    assert v["tamper_evident"] is True and v["blocks"] >= 2 and v["space"] == sb.SPACE
+    # the server's own verify agrees: one chain, one space, intact
+    assert server.verify(space=sb.SPACE)["valid"] is True
+    blocks = sb.project_blocks(cwd)
+    assert all(b["action"] for b in blocks) and blocks[0]["action"] == "decision: keep sqlite"
+
+
+@pytest.mark.skipif(not _core_is_v2(), reason="the move only happens with arkhive-mcp >= 2; a 0.x core has one chamber")
+def test_history_in_the_old_chamber_is_still_read_after_the_move(sb, tmp_path, monkeypatch):
+    """The 0.x chamber keeps what it recorded; the brief merges it read-only, newest first, and never rewrites it."""
+    import sqlite3
+    proj = _repo(tmp_path / "p")
+    cwd = str(proj)
+    legacy = sb.LEGACY_CHAIN_DB
+    active = tmp_path / "home" / ".arkhive" / "v2" / "chain.db"
+    monkeypatch.setattr(sb, "CHAIN_DB", active)
+    monkeypatch.setattr(sb, "_CORE", None)
+    legacy.parent.mkdir(parents=True, exist_ok=True)
+    with sqlite3.connect(str(legacy)) as c:
+        c.execute("CREATE TABLE IF NOT EXISTS blocks(idx INTEGER, ts TEXT, actor TEXT, action TEXT, data TEXT, prev_hash TEXT, hash TEXT)")
+        c.execute("INSERT INTO blocks VALUES(0,'2026-01-01T00:00:00Z','seatbelt-ri-001','decision: old chamber',?, 'g','h')",
+                  (json.dumps({"project": cwd, "what": "recorded before the move"}),))
+    before = legacy.read_bytes()
+    sb.record("decision: new chain", {"project": cwd, "what": "recorded after the move"})
+    blocks = sb.project_blocks(cwd)
+    actions = [b["action"] for b in blocks]
+    assert actions[:2] == ["decision: new chain", "decision: old chamber"]
+    assert legacy.read_bytes() == before
+    text = sb.brief(cwd)
+    assert "recorded before the move" in text and "recorded after the move" in text

@@ -9,6 +9,13 @@ exists — `govern_stub.infer_flags` for the risk vocabulary and the bundled Ark
 (`arkhive_mcp.core`) for the tamper-evident record and the cross-session memory — and adds
 nothing the MCP server does not already know how to do.
 
+Which chain: with arkhive-mcp >= 2 installed next to it, the seatbelt writes to the same file and
+space the Sentarion v2 MCP server uses (~/.arkhive/v2/chain.db, space `sentarion`), tagged
+`seatbelt`, so the server's `recall` / `verify` see the hooks' records and the session brief reads
+back what the model itself `remember`ed. With arkhive-mcp 0.x it uses the 0.x local chamber
+(~/.sentarion/local_chamber.db). ARKHIVE_DB overrides either. History left in the 0.x chamber is
+still read into the brief after the move; nothing is migrated or rewritten.
+
 What it does, per hook event (Claude Code names; Cursor maps onto the same functions):
 
   pre   (PreToolUse)   match the tool call against the installed policies; deny / ask / allow.
@@ -59,7 +66,31 @@ HOME = Path(os.environ.get("SENTARION_SEATBELT_USER_HOME") or os.path.expanduser
 SEATBELT_HOME = Path(os.environ.get("SENTARION_SEATBELT_HOME") or (HOME / ".sentarion" / "seatbelt"))
 POLICY_DIR = SEATBELT_HOME / "policies"
 SESSION_DIR = SEATBELT_HOME / "sessions"
-CHAIN_DB = Path(os.environ.get("ARKHIVE_DB") or (HOME / ".sentarion" / "local_chamber.db"))
+SPACE = os.environ.get("SENTARION_SPACE", "sentarion")          # v2 chains are partitioned by space; match the server
+LEGACY_CHAIN_DB = HOME / ".sentarion" / "local_chamber.db"      # the 0.x local chamber (arkhive-mcp < 2)
+
+
+def _chain_class():
+    """arkhive-mcp >= 2 exposes `Chain` (spaces, kinds, tags, signatures): the very file the Sentarion v2 MCP
+    server writes, so its `recall` / `verify` see the seatbelt's records. Older cores expose module functions.
+    None when arkhive is not importable at all (the seatbelt still gates; it just cannot remember)."""
+    try:
+        from arkhive_mcp import core  # noqa: WPS433
+    except Exception:  # noqa: BLE001
+        return None
+    return getattr(core, "Chain", None)
+
+
+def _default_chain_db() -> Path:
+    env = os.environ.get("ARKHIVE_DB")
+    if env:
+        return Path(env)
+    if _chain_class() is not None:
+        return HOME / ".arkhive" / "v2" / "chain.db"   # arkhive-mcp >= 2 default; Sentarion v2 writes here
+    return LEGACY_CHAIN_DB
+
+
+CHAIN_DB = _default_chain_db()
 
 CLAUDE_SETTINGS = HOME / ".claude" / "settings.json"
 CLAUDE_JSON = HOME / ".claude.json"
@@ -138,12 +169,83 @@ def _now() -> str:
 
 # --------------------------------------------------------------------------- chain (memory + receipts)
 
+def _kind_of(action: str) -> str:
+    head = action.split(":", 1)[0].split(" ", 1)[0].lower()
+    return head if head in ("decision", "milestone", "gate", "edit", "command", "session_start", "session_end",
+                            "stop_block", "installed") else "seatbelt"
+
+
+class _ChainV2:
+    """The seatbelt's four chain calls, in the 0.x shape, over an arkhive-mcp >= 2 `Chain`. Records land in the
+    same file and space the Sentarion v2 MCP server uses, tagged `seatbelt`, signed by the same key."""
+    v2 = True
+
+    def __init__(self, db: Path, chain_cls):
+        self.db_path = str(db)
+        self.chain = chain_cls(db_path=str(db))
+
+    def resolve_actor(self, actor: str):
+        return self.chain.resolve_actor(actor)
+
+    def birth(self, name: str, covenant: list[str]) -> dict:
+        return self.chain.birth(name, covenant, born_by=ACTOR)
+
+    def remember(self, actor: str, action: str, data: dict) -> dict:
+        return self.chain.remember(actor, action, data, kind=_kind_of(action), tags=[ACTOR], space=SPACE)
+
+    def verify(self) -> dict:
+        import sqlite3
+        v = self.chain.verify(space=SPACE)
+        with sqlite3.connect(self.db_path) as c:
+            n = c.execute("SELECT COUNT(*) FROM blocks WHERE space=?", (SPACE,)).fetchone()[0]
+        return {"blocks": n, "broken_links": 0 if v.get("valid") else 1, "tamper_evident": bool(v.get("valid")),
+                "space": SPACE, "signing": v.get("signing"), "verdict": v.get("verdict")}
+
+
+class _ChainLegacy:
+    """arkhive-mcp 0.x: module functions over ARKHIVE_DB."""
+    v2 = False
+
+    def __init__(self, core):
+        self.core = core
+        self.db_path = str(CHAIN_DB)
+
+    def resolve_actor(self, actor: str):
+        return self.core.resolve_actor(actor)
+
+    def birth(self, name: str, covenant: list[str]) -> dict:
+        return self.core.birth(name, covenant)
+
+    def remember(self, actor: str, action: str, data: dict) -> dict:
+        return self.core.remember(actor, action, data)
+
+    def verify(self) -> dict:
+        return self.core.verify()
+
+
+_CORE: _ChainV2 | _ChainLegacy | None = None
+
+
 def _core():
     """The bundled ArkHive chain, pointed at the same file the MCP server's local chamber uses, so the
     `recall` / `verify` tools see what the seatbelt wrote. Import is lazy: CHAIN_DB is fixed at import time."""
-    os.environ.setdefault("ARKHIVE_DB", str(CHAIN_DB))
-    from arkhive_mcp import core  # noqa: WPS433
-    return core
+    global _CORE
+    if _CORE is None:
+        cls = _chain_class()
+        if cls is not None:
+            _CORE = _ChainV2(CHAIN_DB, cls)
+        else:
+            os.environ.setdefault("ARKHIVE_DB", str(CHAIN_DB))
+            from arkhive_mcp import core  # noqa: WPS433
+            _CORE = _ChainLegacy(core)
+    return _CORE
+
+
+def chain_mode() -> str:
+    try:
+        return "v2" if getattr(_core(), "v2", False) else "legacy"
+    except Exception:  # noqa: BLE001
+        return "none"
 
 
 def _ensure_born() -> str:
@@ -172,19 +274,36 @@ def _project_of(cwd: str) -> str:
     return str(p)
 
 
-def project_blocks(project: str, limit: int = 400) -> list[dict]:
-    """Blocks the seatbelt wrote for this project, newest first. Reads the chain file directly (the core
-    API has no data filter and a session brief must stay fast)."""
+def _blocks_from(db: Path, project: str, limit: int) -> list[dict]:
+    """Seatbelt records for this project in one chain file, newest first. Reads the file directly (the core
+    API has no data filter and a session brief must stay fast). Understands both schemas: the 0.x chamber
+    (idx, no space) and arkhive-mcp >= 2 (space, seq, kind, tags), where a record counts as the seatbelt's
+    when the seatbelt soul wrote it OR it carries the `seatbelt` tag (the model's own `remember` calls are
+    signed by the server's runtime seat, so the tag is what ties them to this brief)."""
     import sqlite3
-    if not CHAIN_DB.exists():
+    if not db.exists():
         return []
-    needle = json.dumps(project)[1:-1]
+    needles: list[str] = []
+    for form in dict.fromkeys((project, project.replace("\\", "/"))):
+        esc = json.dumps(form)[1:-1]
+        needles += [f'%"project": "{esc}"%', f'%"project":"{esc}"%']     # json.dumps spacing vs canonical
+    where_data = "(" + " OR ".join(["data LIKE ?"] * len(needles)) + ")"
     try:
-        with sqlite3.connect(str(CHAIN_DB)) as c:
-            rows = c.execute(
-                "SELECT idx, ts, action, data FROM blocks WHERE actor LIKE ? AND data LIKE ? ORDER BY idx DESC LIMIT ?",
-                (f"{ACTOR}-ri-%", f'%"project": "{needle}"%', limit),
-            ).fetchall()
+        with sqlite3.connect(str(db)) as c:
+            cols = {r[1] for r in c.execute("PRAGMA table_info(blocks)")}
+            if not cols:
+                return []
+            if "space" in cols:
+                rows = c.execute(
+                    f"SELECT seq, ts, action, data FROM blocks WHERE space=? AND (actor LIKE ? OR tags LIKE ?) "
+                    f"AND {where_data} ORDER BY seq DESC LIMIT ?",
+                    (SPACE, f"{ACTOR}-ri-%", f'%"{ACTOR}"%', *needles, limit),
+                ).fetchall()
+            else:
+                rows = c.execute(
+                    f"SELECT idx, ts, action, data FROM blocks WHERE actor LIKE ? AND {where_data} ORDER BY idx DESC LIMIT ?",
+                    (f"{ACTOR}-ri-%", *needles, limit),
+                ).fetchall()
     except sqlite3.Error:
         return []
     out = []
@@ -195,6 +314,27 @@ def project_blocks(project: str, limit: int = 400) -> list[dict]:
             d = {"raw": data}
         out.append({"idx": idx, "ts": ts, "action": action, "data": d})
     return out
+
+
+def _legacy_db_in_play() -> Path | None:
+    """The 0.x chamber, when it still holds history and is not the active chain (the chain moved to v2)."""
+    try:
+        if LEGACY_CHAIN_DB.exists() and LEGACY_CHAIN_DB.resolve() != CHAIN_DB.resolve():
+            return LEGACY_CHAIN_DB
+    except OSError:
+        pass
+    return None
+
+
+def project_blocks(project: str, limit: int = 400) -> list[dict]:
+    """Blocks the seatbelt wrote for this project, newest first: the active chain plus, read-only, whatever the
+    0.x chamber recorded before the chain moved to v2. Nothing is migrated or rewritten."""
+    out = _blocks_from(CHAIN_DB, project, limit)
+    legacy = _legacy_db_in_play()
+    if legacy is not None:
+        out += _blocks_from(legacy, project, limit)
+        out.sort(key=lambda b: b["ts"], reverse=True)
+    return out[:limit]
 
 
 # --------------------------------------------------------------------------- policies
@@ -379,7 +519,9 @@ def hook_pre(payload: dict, policies: list[dict] | None = None) -> dict | None:
         reason += " Do not retry it under another name or work around it; tell the user what you wanted to do and why."
     return {"hookSpecificOutput": {"hookEventName": "PreToolUse", "permissionDecision": verdict["decision"],
                                    "permissionDecisionReason": reason},
-            "seatbelt": {"policies": entry["policies"], "recorded": "idx" in receipt}}
+            "seatbelt": {"policies": entry["policies"],
+                         # 0.x returns idx, v2 returns seq; both return a hash only when the block was written
+                         "recorded": bool(receipt.get("hash")) and not receipt.get("refused") and "error" not in receipt}}
 
 
 def _is_test_command(cmd: str, policies: list[dict]) -> bool:
@@ -497,9 +639,16 @@ def brief(project: str, limit_blocks: int = 400) -> str:
         if gates:
             g = gates[0]["data"]
             lines.append(f"Last gate event: {gates[0]['action']} on `{g.get('text', '')[:80]}` ({', '.join(g.get('policies', []))}).")
+    proj = project.replace("\\", "/")
+    if chain_mode() == "v2":
+        # The v2 server signs every record as its runtime seat and refuses any other actor; the tag is the tie.
+        how = ("`remember` with action \"decision: <what>\" (or \"milestone: <what>\"), tags [\"seatbelt\"] and data "
+               "{\"project\": \"" + proj + "\"} — do not pass an actor")
+    else:
+        how = ("`remember` with actor \"seatbelt\", action \"decision: <what>\" (or \"milestone: <what>\") and data "
+               "{\"project\": \"" + proj + "\"}")
     lines.append("Keep the memory honest: when you decide something or finish a milestone, call the sentarion MCP tool "
-                 "`remember` with actor \"seatbelt\", action \"decision: <what>\" (or \"milestone: <what>\") and data "
-                 "{\"project\": \"" + project.replace("\\", "/") + "\"}. It is read back here next time. "
+                 + how + ". It is read back here next time. "
                  "Before anything irreversible, expect the seatbelt to ask; a deny is final.")
     return "\n".join(lines)
 
@@ -872,7 +1021,10 @@ def doctor(python: str | None = None) -> dict:
             "cursor_hooks": cursor_wired, "skills": skills,
             "policies": [{"name": p["name"], "rules": len(p.get("rules") or []), "on_stop": (p.get("on_stop") or {}).get("kind"),
                           "error": p.get("_error")} for p in pols],
-            "policy_dir": str(POLICY_DIR), "chain": {"db": str(CHAIN_DB), **verify}, "self_test": st,
+            "policy_dir": str(POLICY_DIR),
+            "chain": {"db": str(CHAIN_DB), "mode": chain_mode(), "space": SPACE,
+                      "legacy_db": str(_legacy_db_in_play()) if _legacy_db_in_play() else None, **verify},
+            "self_test": st,
             "next_steps": [] if ready else ["run: sentarion seatbelt install --client claude"]}
 
 

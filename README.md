@@ -79,6 +79,14 @@ sentarion seatbelt recall                          # the project brief the next 
 | SessionStart | the project brief: files edited, commands run, what failed, decisions recorded with `remember`, and how the last session ended. |
 | Stop | with code edits and no test/build/run since the last edit, sends the agent back once; a wiring policy can also list frontend routes with no backend. |
 
+**Which chain.** With `arkhive-mcp >= 2` installed next to the seatbelt (the Sentarion v2 line), the hooks write to the
+same file and space the v2 server uses (`~/.arkhive/v2/chain.db`, space `sentarion`), tagged `seatbelt`, signed by the
+same key: the server's `recall` / `verify` see them and the brief reads back what the model itself `remember`ed (the v2
+server signs every record as its runtime seat and refuses any other actor, so the brief tells the model to pass the tag,
+not an actor). With `arkhive-mcp 0.x` the hooks use `~/.sentarion/local_chamber.db`. `ARKHIVE_DB` overrides either;
+`sentarion seatbelt doctor` reports `chain.mode` (`v2` / `legacy`). History left in the 0.x chamber is still read into
+the brief after a move; nothing is migrated or rewritten.
+
 Policies are plain JSON (`decision`, `tools`, `match`, `paths`, `content_match`, `reason`; see `seatbelt.POLICY_SCHEMA`).
 The baseline asks before the irreversible verbs. The packaged version with five policies, three skills and one-click
 installers is the [Claude Code Seatbelt Kit](https://inboxaxe.com/mcp#seatbelt).
