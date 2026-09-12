@@ -281,3 +281,31 @@ def test_chain_stays_verifiable_after_seatbelt_writes(sb, tmp_path):
         sb.record("edit", {"project": str(_repo(tmp_path)), "path": f"f{i}.py"})
     v = sb._core().verify()
     assert v["tamper_evident"] is True and v["blocks"] >= 5
+
+
+def test_install_mcp_keeps_a_foreign_sentarion_entry(sb):
+    sb.CLAUDE_JSON.parent.mkdir(parents=True, exist_ok=True)
+    theirs = {"type": "stdio", "command": "C:/theirs/sentarion.exe", "args": [], "env": {"SENTARION_HUMANE_CMD": "x"}}
+    sb.CLAUDE_JSON.write_text(json.dumps({"mcpServers": {"sentarion": theirs}, "other": 1}), encoding="utf-8")
+    out = sb.install_mcp_claude("C:/py/python.exe")
+    assert out["kept_existing"] == "C:/theirs/sentarion.exe"
+    data = json.loads(sb.CLAUDE_JSON.read_text(encoding="utf-8"))
+    assert data["mcpServers"]["sentarion"] == theirs and data["other"] == 1
+    # ours is replaced by ours (a re-install with a new interpreter)
+    sb.CLAUDE_JSON.write_text(json.dumps({"mcpServers": {"sentarion": {"command": "old", "args": ["-m", "sentarion_mcp.server"]}}}), encoding="utf-8")
+    sb.install_mcp_claude("C:/py/new.exe")
+    assert json.loads(sb.CLAUDE_JSON.read_text(encoding="utf-8"))["mcpServers"]["sentarion"]["command"] == "C:/py/new.exe"
+
+
+def test_a_python_one_liner_counts_as_running_the_code(sb, tmp_path):
+    """Measured in a real Claude Code session: with no test suite the agent reaches for `python -c ...`."""
+    proj = _repo(tmp_path / "p")
+    (proj / "src").mkdir(parents=True)
+    f = proj / "src" / "a.py"
+    f.write_text("x=1", encoding="utf-8")
+    cwd = str(proj)
+    sb.hook_post({"session_id": "s", "cwd": cwd, "tool_name": "Write", "tool_input": {"file_path": str(f), "content": "x=2"}})
+    sb.hook_post({"session_id": "s", "cwd": cwd, "tool_name": "Bash",
+                  "tool_input": {"command": "python -c \"import sys; sys.path.insert(0,'src'); import a; print(a.x)\""}, "tool_response": "2"})
+    assert sb.hook_stop({"session_id": "s", "cwd": cwd}) is None
+    assert "did not" not in sb.brief(sb._project_of(cwd))

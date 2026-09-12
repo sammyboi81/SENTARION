@@ -105,7 +105,8 @@ BASELINE_POLICY = {
             r"\bcargo\s+(test|build|check)\b|\bgo\s+(test|build|vet)\b|\bmake\s+(test|check|build)\b",
             r"\b(dotnet|mvn|gradle|gradlew)\s+(test|build)\b|\brspec\b|\bphpunit\b",
             r"\bcurl\b.*\b(localhost|127\.0\.0\.1)\b",
-            r"\bpython\s+[^|;\n]*\.py\b|\bnode\s+[^|;\n]*\.(js|mjs|ts)\b",
+            r"\bpython3?\s+[^|;\n]*\.py\b|\bnode\s+[^|;\n]*\.(js|mjs|ts)\b",
+            r"\bpython3?\s+-c\b|\bnode\s+-e\b|\bdeno\s+(run|test|eval)\b|\bbun\s+(run|test)\b|\bruby\s+-e\b|\bphp\s+-r\b",
         ],
         "code_globs": ["**/*.py", "**/*.js", "**/*.jsx", "**/*.ts", "**/*.tsx", "**/*.go", "**/*.rs", "**/*.rb",
                        "**/*.php", "**/*.java", "**/*.cs", "**/*.vue", "**/*.svelte", "**/*.html", "**/*.css", "**/*.sql"],
@@ -742,8 +743,14 @@ def uninstall_claude(settings: Path = CLAUDE_SETTINGS) -> dict:
 
 
 def install_mcp_claude(python: str, claude_json: Path = CLAUDE_JSON) -> dict:
+    """Register the `sentarion` stdio server in the user scope. A `sentarion` entry the user configured
+    themselves (anything we did not write) is kept untouched and reported — never clobbered."""
     data = _load_json(claude_json)
     servers = data.setdefault("mcpServers", {})
+    existing = servers.get("sentarion")
+    if existing and list(existing.get("args") or []) != ["-m", "sentarion_mcp.server"]:
+        return {"file": str(claude_json), "server": "sentarion", "kept_existing": existing.get("command"),
+                "note": "a sentarion MCP server was already configured; left as is"}
     servers["sentarion"] = {"type": "stdio", "command": python, "args": ["-m", "sentarion_mcp.server"], "env": {}}
     _save_json(claude_json, data)
     return {"file": str(claude_json), "server": "sentarion"}
