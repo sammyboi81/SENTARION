@@ -64,8 +64,8 @@ def test_infer_flags_catches_the_obvious_and_leaves_ordinary_work_alone():
     assert "irreversible" in g.infer_flags("delete the production database")
     assert "irreversible" in g.infer_flags("rm -rf the deploy directory and force-push main")
     assert "external_send" in g.infer_flags("email all 4,000 customers a discount code")
-    assert "spends_money" in g.infer_flags("pay the $1,200 invoice to the vendor")
-    assert "deploys" in g.infer_flags("deploy the new build to production")
+    assert "financial" in g.infer_flags("pay the $1,200 invoice to the vendor")
+    assert "external_send" in g.infer_flags("deploy the new build to production")
     for benign in ("write a summary file", "list three risks of storing session tokens in localStorage",
                    "compare token-bucket and sliding-window rate limiting", "draft the release notes"):
         assert g.infer_flags(benign) == [], benign
@@ -76,8 +76,8 @@ def test_dangerous_actions_block_by_default(monkeypatch):
     for action, flag in (("delete the production database", "irreversible"),
                          ("email all 4,000 customers a discount code", "external_send"),
                          ("rm -rf the deploy directory and force-push main", "irreversible"),
-                         ("charge the customer's card $500", "spends_money"),
-                         ("deploy this to production now", "deploys")):
+                         ("charge the customer's card $500", "financial"),
+                         ("deploy this to production now", "external_send")):
         d = _govern(action)
         assert d["decision"] == "block", action
         assert flag in d["inferred_flags"] and flag in d["reason"], action

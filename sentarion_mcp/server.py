@@ -110,7 +110,7 @@ INSTRUCTIONS = (
     "name, which resolves to that identity on each chain); pass that actor as the "
     "actor argument on every later call.\n\n"
     "Call govern before any action that sends, deletes, spends, deploys or edits files. It reads the obvious risks off "
-    "the action text itself (delete / drop / force-push, send to all customers, pay, deploy to production) and blocks "
+    "the action text itself (delete / drop / force-push, send to all customers, deploy to production, pay) and blocks "
     "them by default; pass flags for anything it cannot see. A block "
     "verdict is final: do not retry it under another name and do not work around it.\n\n"
     "Never invent tool results, chain records or capabilities. If a chain reports not_configured "

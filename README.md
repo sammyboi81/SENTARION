@@ -163,7 +163,7 @@ Trial key + pricing: **https://inboxaxe.com/mcp** — or, from any client that h
   refused as "not a born soul".
 - A chamber that cannot answer (for example a chain file written by ArkHive 2.x) is now a readable
   `{error, fix}` in the birth reply instead of an "unhandled errors in a TaskGroup" crash.
-- `govern` infers the obvious risk flags from the action text (irreversible, external_send, spends_money, deploys)
+- `govern` infers the obvious risk flags from the action text (irreversible, external_send, financial - the same names v2 uses)
   and refuses them by default, on both chambers. Before, `govern("delete the production database")` was approved,
   and so was the same call with `flags=["irreversible"]`, because no default rule named those triggers.
 - README leads with the first minute, measured.

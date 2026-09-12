@@ -55,10 +55,11 @@ _BASE_RULES = [
     # The obvious risk classes refuse by default. Measured 2026-09-10 from a clean install: without these,
     # govern("delete the production database") - and even the same call with flags=["irreversible"] - was
     # APPROVED, because no rule named those triggers. A gate that says yes to that is broken, not tiered.
+    # The flag names are the SAME vocabulary v2 uses (raw_pii, credentials, financial, irreversible, external_send,
+    # mass_action), so a policy written against one line means the same thing on the other.
     {"trigger": "irreversible", "action": "refuse"},
     {"trigger": "external_send", "action": "refuse"},
-    {"trigger": "spends_money", "action": "refuse"},
-    {"trigger": "deploys", "action": "refuse"},
+    {"trigger": "financial", "action": "refuse"},
 ]
 
 # What the free gate infers from the action text by itself: the verbs anyone would call dangerous. Deliberately
@@ -70,9 +71,9 @@ _INFER = {
         r"\breset\s+--hard|\bshred\b", re.I),
     "external_send": re.compile(
         r"\b(email|e-mail|send|post|publish|tweet|broadcast|dm|text|message|notify)\b[^.]{0,60}\b(all|every|everyone|"
-        r"customers?|subscribers?|users|list|contacts|followers|public|external)\b", re.I),
-    "spends_money": re.compile(r"\b(pay|charge|transfer|wire|refund|purchase|buy|bill)\b|\$\s?\d", re.I),
-    "deploys": re.compile(r"\b(deploy|release|ship|roll\s?out|push)\b[^.]{0,40}\b(prod|production|live|staging|main)\b", re.I),
+        r"customers?|subscribers?|users|list|contacts|followers|public|external)\b|"
+        r"\b(deploy|release|ship|roll\s?out|push)\b[^.]{0,40}\b(prod|production|live|staging|main)\b", re.I),
+    "financial": re.compile(r"\b(pay|charge|transfer|wire|refund|purchase|buy|bill)\b|\$\s?\d", re.I),
 }
 
 
