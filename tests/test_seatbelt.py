@@ -309,3 +309,18 @@ def test_a_python_one_liner_counts_as_running_the_code(sb, tmp_path):
                   "tool_input": {"command": "python -c \"import sys; sys.path.insert(0,'src'); import a; print(a.x)\""}, "tool_response": "2"})
     assert sb.hook_stop({"session_id": "s", "cwd": cwd}) is None
     assert "did not" not in sb.brief(sb._project_of(cwd))
+
+
+def test_edit_outside_the_project_never_triggers_the_stop_gate(sb, tmp_path):
+    """Reported by a peer session 2026-09-12: a patch script in a scratchpad was counted as a project code edit."""
+    proj = _repo(tmp_path / "p")
+    scratch = tmp_path / "scratch" / "patch.py"
+    scratch.parent.mkdir(parents=True)
+    scratch.write_text("x=1", encoding="utf-8")
+    cwd = str(proj)
+    sb.hook_post({"session_id": "s", "cwd": cwd, "tool_name": "Write", "tool_input": {"file_path": str(scratch), "content": "x=2"}})
+    st = sb.load_session("s")
+    assert st["edits"] == [] and st["last_edit"] is None
+    assert sb.hook_stop({"session_id": "s", "cwd": cwd}) is None
+    blocks = sb.project_blocks(sb._project_of(cwd))
+    assert any(b["action"] == "edit" and b["data"].get("outside") for b in blocks)   # still remembered

@@ -405,9 +405,16 @@ def hook_post(payload: dict, policies: list[dict] | None = None) -> dict | None:
     ts = _now()
     if kind == "edit" and text:
         rel = _relative(text, project)
-        state["edits"].append({"ts": ts, "path": rel, "tool": tool})
-        state["last_edit"] = ts
-        record("edit", {"project": project, "path": rel, "tool": tool, "session": state["session_id"]})
+        if rel is None:
+            # Outside the project (a scratch file, a patch script in a temp dir): remembered, never counted as a code
+            # edit the stop gate should demand tests for. Measured 2026-09-12: the gate held a session hostage over
+            # a *.py in a scratchpad after the project's own tests had run.
+            record("edit", {"project": project, "path": str(text).replace("\\", "/"), "tool": tool, "outside": True,
+                            "session": state["session_id"]})
+        else:
+            state["edits"].append({"ts": ts, "path": rel, "tool": tool})
+            state["last_edit"] = ts
+            record("edit", {"project": project, "path": rel, "tool": tool, "session": state["session_id"]})
     elif kind == "shell" and text:
         resp = payload.get("tool_response")
         failed = _looks_failed(resp)
@@ -436,11 +443,12 @@ def _looks_failed(resp: Any) -> bool | None:
     return None
 
 
-def _relative(path: str, project: str) -> str:
+def _relative(path: str, project: str) -> str | None:
+    """Project-relative path with forward slashes, or None when the file lives outside the project."""
     try:
         return str(Path(path).resolve().relative_to(Path(project).resolve())).replace("\\", "/")
     except (ValueError, OSError):
-        return str(path).replace("\\", "/")
+        return None
 
 
 def brief(project: str, limit_blocks: int = 400) -> str:
