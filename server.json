@@ -1,8 +1,8 @@
 {
   "$schema": "https://static.modelcontextprotocol.io/schemas/2025-07-09/server.schema.json",
-  "name": "io.github.sammyboi81/sentarion",
+  "name": "io.github.sammyboi81/SENTARION",
   "description": "Seatbelt for Claude Code: hooks that stop the irreversible, remember the project, and prove done.",
-  "repository": { "url": "https://github.com/sammyboi81/sentarion", "source": "github" },
+  "repository": { "url": "https://github.com/sammyboi81/SENTARION", "source": "github" },
   "version": "0.4.1",
   "packages": [
     {
