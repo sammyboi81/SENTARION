@@ -31,6 +31,8 @@ def sb(tmp_path, monkeypatch):
     src = KIT / "policies" if KIT.is_dir() else HERE / "seatbelt_policies"
     if src.is_dir():
         mod.install_policies(src)
+    else:
+        mod.POLICY_DIR.mkdir(parents=True, exist_ok=True)
     return mod
 
 

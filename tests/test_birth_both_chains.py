@@ -15,6 +15,14 @@ from mcp.types import TextContent
 from sentarion_mcp import server
 from sentarion_mcp.clients import HumaneNotConfigured, tool_json
 
+try:
+    ExceptionGroup  # noqa: B018 - Python 3.11+ builtin
+except NameError:  # pragma: no cover - Python 3.10, where server._exc_name() only
+    class ExceptionGroup(Exception):  # duck-types on .exceptions, never the real type
+        def __init__(self, message, exceptions):
+            super().__init__(message)
+            self.exceptions = exceptions
+
 
 def _text(text):
     return SimpleNamespace(content=[TextContent(type="text", text=text)])
